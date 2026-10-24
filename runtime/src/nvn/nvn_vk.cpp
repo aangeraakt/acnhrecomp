@@ -14,11 +14,13 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <mutex>
 #include <set>
 #include <string>
 #include <tuple>
 #include <vector>
 
+#include "nvn_shaders.h"
 #include "nvn_ultrawide.h"
 #include "nvn_vk.h"
 #include "ui/ui.h"
@@ -77,8 +79,37 @@ PFN_vkCreateDevice p_create_device = nullptr;
 
 // A lost device means the GPU hung (a shader looping for ever): the process ends at once. Submitting more work, or
 // waiting, keeps the GPU stuck, and on macOS that froze WindowServer and restarted the machine.
+// The programs drawn by the last three submits (vertex + fragment shader), logged when the GPU hangs: a hang shows
+// up one or two submits later than the one that caused it (pipelined frames). Then NX_SKIP_FS finds the culprit.
+std::mutex g_hang_lock;
+std::vector<std::pair<const ShaderInfo*, const ShaderInfo*>> g_hang_lists[3];
+size_t g_hang_at = 0;
+
+void hang_note(const ShaderInfo* vs, const ShaderInfo* fs) {
+    std::lock_guard lk(g_hang_lock);
+    auto& v = g_hang_lists[g_hang_at];
+    for (const auto& p : v)
+        if (p.first == vs && p.second == fs) return;
+    if (v.size() < 512) v.emplace_back(vs, fs);
+}
+
+void hang_next_submit() {
+    std::lock_guard lk(g_hang_lock);
+    g_hang_at = (g_hang_at + 1) % 3;
+    g_hang_lists[g_hang_at].clear();
+}
+
 [[noreturn]] void gpu_hung(const char* why) {
     log("nvn/vk: GPU hang (%s): stopping", why);
+    {
+        std::lock_guard lk(g_hang_lock);
+        for (size_t k = 0; k < 3; k++) {
+            const auto& v = g_hang_lists[(g_hang_at + 1 + k) % 3];  // oldest first
+            std::string line;
+            for (const auto& [vs, fs] : v) line += " " + (fs ? fs->hash : std::string("-"));
+            log("nvn/vk: hang: submit -%zu drew %zu programs, fragment shaders:%s", 2 - k, v.size(), line.c_str());
+        }
+    }
     std::fprintf(stderr, "nvn/vk: GPU hang (%s): stopping\n", why);
     _exit(4);
 }
@@ -613,6 +644,7 @@ void gpu_submit(const std::vector<std::shared_ptr<CmdList>>& lists, std::shared_
     const FrameTimes f_in = frame_times();
     uint64_t lists_epoch = 0;
     for (auto& l : lists) lists_epoch = std::max(lists_epoch, l->epoch);
+    hang_next_submit();
     ReplayScope replay(lists_epoch);  // the texture mark (#55, #57), then drain_objects (under the GPU lock, #50)
     if (!init()) return;
     uw_apply();  // a new screen scale starts with a frame (nvn_ultrawide.cpp)

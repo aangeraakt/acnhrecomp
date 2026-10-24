@@ -389,6 +389,10 @@ void* load_vulkan() {
     __system_property_get("ro.hardware.vulkan", vk);
     const std::string turnip = g_native_lib_dir + "/libvulkan_freedreno.so";
     if (pick != "system" && std::strcmp(vk, "adreno") == 0 && !g_native_lib_dir.empty() && access(turnip.c_str(), R_OK) == 0) {
+        // Turnip's binning pass faulted the GPU on this game (a write at address 0x40 from VSC/VPC, the kernel's log)
+        // and hung it; without binning (still rendering in tiles) the same frames draw right. config.txt can still
+        // set TU_DEBUG itself.
+        setenv("TU_DEBUG", "nobin", 0);
         std::string tmp = g_cache_dir + "/adrenotools/";
         mkdir(tmp.c_str(), 0700);
         std::string libs = g_native_lib_dir + "/";
@@ -678,7 +682,10 @@ extern "C" void android_main(android_app* app) {
         while (std::getline(f, line)) {
             while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
             auto eq = line.find('=');
-            if (line.rfind("NX_", 0) == 0 && eq != std::string::npos)
+            // NX_* for the runtime; TU_* / MESA_* / FD_* for Turnip (read when the driver loads, later).
+            bool ours = line.rfind("NX_", 0) == 0 || line.rfind("TU_", 0) == 0 || line.rfind("MESA_", 0) == 0 ||
+                        line.rfind("FD_", 0) == 0;
+            if (ours && eq != std::string::npos)
                 setenv(line.substr(0, eq).c_str(), line.substr(eq + 1).c_str(), 0);
         }
         // NX_HANDHELD=0 in config.txt (the launcher's TV mode): docked, 1080p. svc_am.cpp tests only whether the variable
