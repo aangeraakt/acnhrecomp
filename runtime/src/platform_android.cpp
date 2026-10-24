@@ -328,7 +328,7 @@ void window_size(uint32_t& w, uint32_t& h) {
 }
 
 // A GPU tier from the Vulkan device name (queried once, before the game starts its renderer): current Adreno 7xx
-// and 8xx, Mali-G7xx and newer, Immortalis, Xclipse render at 1; Adreno 6xx at 0.85; anything older at 2/3
+// and 8xx, Mali-G7xx and newer, Immortalis, Xclipse render at 1; Adreno 6xx at 900 rows; anything older at 2/3
 // (about 720p, the Switch's handheld resolution).
 float default_render_scale() {
     static float scale = [] {
@@ -359,7 +359,7 @@ float default_render_scale() {
                 name.find("Xclipse") != std::string::npos)
                 s = 1.0f;
             else if (adreno >= 610 || mali >= 76)
-                s = 0.85f;
+                s = 900.0f / 1080;  // Adreno 650 at 900 rows: 27 ms of GPU a frame, 66 C; 1080 rows needed 35 ms
             nx::log("gpu: %s -> default render scale %.2f", p.deviceName, s);
         }
         destroy(inst, nullptr);

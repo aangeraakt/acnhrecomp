@@ -104,9 +104,11 @@ Scale wanted(uint64_t present) {
     if (std::fabs(k - 1.0) < 0.02) k = 1.0;
     k = std::round(k * 256.0) / 256.0;  // a few distinct values: each makes its own UI pipelines
     const double native = config_is_handheld() ? 720.0 : 1080.0;
-    std::string r = setting("NX_RENDER_HEIGHT", "video.resolution", "native");
+    std::string r = setting("NX_RENDER_HEIGHT", "video.resolution", plat::kDefaultResolution);
     double s = 1.0;
-    if (r == "window") {
+    if (r == "auto") {  // the rows this GPU keeps at 30 frames a second (plat::default_render_scale of 1080)
+        s = std::round(1080.0 * plat::default_render_scale()) / native;
+    } else if (r == "window") {
         double rows = std::min(double(wh), double(ww) / (k169 * k));  // the picture's rows, fit in the window
         s = rows / (native * std::max(1.0, 1.0 / k));
     } else if (int rows = std::atoi(r.c_str()); rows > 0) {

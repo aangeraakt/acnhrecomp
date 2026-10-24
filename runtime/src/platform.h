@@ -51,6 +51,15 @@ void window_size(uint32_t& w, uint32_t& h);  // client size in pixels
 void screen_size(uint32_t& w, uint32_t& h);  // the display's own size, landscape (Android; the window on PC)
 // The render scale to use when the player sets none: 1 on fast GPUs, less on slower ones (Android).
 float default_render_scale();
+// The settings' defaults that differ on phones: there the 3D picture's rows follow the GPU ("auto", above) and FSR
+// brings it to the screen's size.
+#if defined(__ANDROID__)
+inline constexpr const char* kDefaultResolution = "auto";
+inline constexpr const char* kDefaultUpscaler = "fsr";
+#else
+inline constexpr const char* kDefaultResolution = "native";
+inline constexpr const char* kDefaultUpscaler = "linear";
+#endif
 
 // NpadButton bits (Nintendo layout: A is the right face button, B the bottom one).
 enum : uint64_t {

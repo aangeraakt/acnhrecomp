@@ -344,15 +344,15 @@ void page_video() {
         combo("video.mode", "docked", {{"docked", tr("video.render.docked")}, {"handheld", tr("video.render.handheld")}}, w);
     });
     row("video.resolution", "video.resolution.desc", [&](float w) {
-        combo("video.resolution", "native",
-              {{"native", tr("video.resolution.native")}, {"540", "540p"}, {"720", "720p"}, {"900", "900p"},
+        combo("video.resolution", plat::kDefaultResolution,
+              {{"auto", tr("common.auto")}, {"native", tr("video.resolution.native")}, {"540", "540p"}, {"720", "720p"}, {"900", "900p"},
                {"1080", "1080p"}, {"1440", "1440p"}, {"2160", "2160p (4K)"}, {"window", tr("video.resolution.window")}},
               w);
     });
     row("video.upscaler", nullptr, [&](float w) {
-        combo("video.upscaler", "linear", {{"linear", tr("video.upscaler.linear")}, {"fsr", tr("video.upscaler.fsr")}}, w);
+        combo("video.upscaler", plat::kDefaultUpscaler, {{"linear", tr("video.upscaler.linear")}, {"fsr", tr("video.upscaler.fsr")}}, w);
     });
-    if (config_get("video.upscaler") == "fsr")
+    if (config_get("video.upscaler", plat::kDefaultUpscaler) == "fsr")
         row("video.sharpness", nullptr, [&](float w) { slider("video.fsr_sharpness_pct", 0, 100, 80, "%d%%", w); });
     row("video.aspect", "video.aspect.desc", [&](float w) {
         combo("video.aspect", "16:9",

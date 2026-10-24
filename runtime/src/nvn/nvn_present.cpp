@@ -13,6 +13,7 @@
 #include <cstring>
 #include <vector>
 
+#include "config.h"
 #include "nvn_vk.h"
 #include "platform.h"
 
@@ -216,7 +217,8 @@ struct Pass {
 bool fsr_on() {
     static const bool on = [] {
         const char* e = std::getenv("NX_FSR");
-        return e && e[0] == '1';
+        if (e) return e[0] == '1';
+        return config_get("video.upscaler", plat::kDefaultUpscaler) == "fsr";  // phones: on (platform.h)
     }();
     return on;
 }
