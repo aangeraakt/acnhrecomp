@@ -4,14 +4,18 @@
 # (Settings > Video > GPU driver): the Adreno 6xx drivers phones ship are Vulkan 1.1 without dynamic rendering and
 # drew nothing of the game, Turnip is Vulkan 1.3 with the extensions the runtime uses.
 #
+# Patches in tools/patches/turnip-*.patch are applied to the release (its MIT licence covers them).
 # usage: tools/build_turnip.sh     -> private/third_party/mesa/build-android/src/freedreno/vulkan/libvulkan_freedreno.so
-#   needs: the Android NDK (as tools/build_android.sh), Homebrew's bison and flex (macOS's are too old)
+#   needs: the Android NDK (as tools/build_android.sh), Homebrew's bison, flex and Python 3.10+ (macOS's are too old)
 cd "$(dirname "$0")/.." || exit 1
 set -e
 MESA=private/third_party/mesa
-TAG=mesa-25.3.6
-export PATH=/opt/homebrew/opt/bison/bin:/opt/homebrew/opt/flex/bin:$PWD/private/venv/bin:$PATH
-private/venv/bin/pip install -q meson mako pyyaml
+TAG=mesa-26.2.5
+# Mesa 26 needs Python 3.10 or newer: its own venv from Homebrew's.
+PY=$(ls /opt/homebrew/bin/python3.1[0-9] 2>/dev/null | sort -V | tail -1)
+[ -x private/venv-mesa/bin/python ] || "${PY:-python3}" -m venv private/venv-mesa
+export PATH=/opt/homebrew/opt/bison/bin:/opt/homebrew/opt/flex/bin:$PWD/private/venv-mesa/bin:$PATH
+private/venv-mesa/bin/pip install -q meson mako pyyaml packaging
 NDK=${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}/ndk/28.2.13676358
 TC=$NDK/toolchains/llvm/prebuilt/darwin-x86_64/bin
 CROSS=$PWD/private/android_cross.ini
@@ -33,6 +37,10 @@ endian = 'little'
 EOF2
 [ -d "$MESA/.git" ] || git clone -q --depth 1 --branch "$TAG" https://gitlab.freedesktop.org/mesa/mesa.git "$MESA"
 cd "$MESA"
+# Our changes to the compiler (tools/patches/turnip-*.patch), applied once to the clean release.
+for p in ../../../tools/patches/turnip-*.patch; do
+  git apply --check "$p" 2>/dev/null && git apply "$p" && echo "applied $(basename "$p")"
+done
 [ -f build-android/build.ninja ] || meson setup build-android --cross-file "$CROSS" \
   -Dbuildtype=release -Dplatforms=android -Dplatform-sdk-version=29 -Dandroid-stub=true -Dgallium-drivers= \
   -Dvulkan-drivers=freedreno -Dfreedreno-kmds=kgsl -Degl=disabled -Dgles1=disabled -Dgles2=disabled -Dopengl=false \

@@ -564,6 +564,12 @@ bool draw(VkCommandBuffer cb, const Targets& t, uint32_t mode, bool indexed, con
     set_dynamic(cb, vp, sc);
 
     trace_skin(indexed, c, vs, fs);
+    if (gpu_profile_draws()) {
+        char label[128];
+        std::snprintf(label, sizeof label, "  draw vs %s fs %s n%d x%d", vs->hash.c_str(), fs ? fs->hash.c_str() : "-",
+                      indexed ? c.i[0] : c.i[1], std::max(1, c.i[3]));
+        gpu_profile_mark(cb, label);
+    }
     if (indexed) {
         uint32_t count = uint32_t(c.i[0]);
         if (g_bound.has_index && g_bound.index.buffer == in.index.buffer && g_bound.index.offset == in.index.offset &&

@@ -275,6 +275,7 @@ void gpu_busy_part_begin(uint32_t slot, uint32_t part, VkCommandBuffer cb);
 void gpu_busy_part_end(uint32_t slot, uint32_t part, VkCommandBuffer cb);
 void gpu_busy_retired(uint32_t slot, uint32_t queued);
 void gpu_busy_log(uint64_t frames);
+bool gpu_profile_draws();  // NX_GPU_PROFILE=2: and a mark per draw
 void gpu_profile_begin(VkCommandBuffer cb);
 void gpu_profile_mark(VkCommandBuffer cb, const std::string& label);
 void gpu_profile_collect();

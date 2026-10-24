@@ -358,8 +358,60 @@ std::unique_ptr<PipeBuild> prepare_graphics_pipeline(const PipelineKey& key, con
 // vkCreateGraphicsPipelines on a prepared build. Thread-safe: the device functions are, and the VkPipelineCache is
 // internally synchronized (it is not created EXTERNALLY_SYNCHRONIZED).
 thread_local bool t_worker = false;
+
+// NX_PIPE_STATS=<fragment shader hash>,...: the driver's statistics (instructions, registers, spills, ...) for the
+// pipelines with those fragment shaders, logged, and its internal representations (the GPU's disassembly) written to
+// pipe_<vs>_<fs>.txt in the data folder. Needs VK_KHR_pipeline_executable_properties (nvn_vk.cpp enables it).
+bool pipe_stats_wanted(const std::string& fs) {
+    static const std::string list = std::getenv("NX_PIPE_STATS") ? std::getenv("NX_PIPE_STATS") : "";
+    return !list.empty() && p_vkGetPipelineExecutableStatisticsKHR && list.find(fs) != std::string::npos;
+}
+
+void pipe_stats_log(const PipeBuild& b, VkPipeline p) {
+    VkPipelineInfoKHR pi{VK_STRUCTURE_TYPE_PIPELINE_INFO_KHR};
+    pi.pipeline = p;
+    uint32_t n = 0;
+    p_vkGetPipelineExecutablePropertiesKHR(vk_device(), &pi, &n, nullptr);
+    std::vector<VkPipelineExecutablePropertiesKHR> execs(n, {VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_PROPERTIES_KHR});
+    p_vkGetPipelineExecutablePropertiesKHR(vk_device(), &pi, &n, execs.data());
+    FILE* f = plat::fopen_utf8(plat::data_root() + "/pipe_" + b.vs_hash + "_" + b.fs_hash + ".txt", "w");
+    for (uint32_t e = 0; e < n; e++) {
+        VkPipelineExecutableInfoKHR ei{VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_INFO_KHR};
+        ei.pipeline = p, ei.executableIndex = e;
+        uint32_t ns = 0;
+        p_vkGetPipelineExecutableStatisticsKHR(vk_device(), &ei, &ns, nullptr);
+        std::vector<VkPipelineExecutableStatisticKHR> st(ns, {VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_STATISTIC_KHR});
+        p_vkGetPipelineExecutableStatisticsKHR(vk_device(), &ei, &ns, st.data());
+        std::string line;
+        for (auto& x : st) {
+            char v[64];
+            if (x.format == VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_FLOAT64_KHR) std::snprintf(v, sizeof v, "%.1f", x.value.f64);
+            else if (x.format == VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_INT64_KHR) std::snprintf(v, sizeof v, "%lld", (long long)x.value.i64);
+            else if (x.format == VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR) std::snprintf(v, sizeof v, "%llu", (unsigned long long)x.value.u64);
+            else std::snprintf(v, sizeof v, "%d", int(x.value.b32));
+            line += std::string(x.name) + "=" + v + " ";
+        }
+        log("pipe stats: %s + %s [%s] %s", b.vs_hash.c_str(), b.fs_hash.c_str(), execs[e].name, line.c_str());
+        if (!f) continue;
+        uint32_t nr = 0;
+        p_vkGetPipelineExecutableInternalRepresentationsKHR(vk_device(), &ei, &nr, nullptr);
+        std::vector<VkPipelineExecutableInternalRepresentationKHR> ir(nr, {VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_INTERNAL_REPRESENTATION_KHR});
+        p_vkGetPipelineExecutableInternalRepresentationsKHR(vk_device(), &ei, &nr, ir.data());
+        std::vector<std::vector<char>> text(nr);
+        for (uint32_t r = 0; r < nr; r++) text[r].resize(ir[r].dataSize), ir[r].pData = text[r].data();
+        p_vkGetPipelineExecutableInternalRepresentationsKHR(vk_device(), &ei, &nr, ir.data());
+        std::fprintf(f, "==== %s: %s\n%s\n", execs[e].name, line.c_str(), execs[e].description);
+        for (uint32_t r = 0; r < nr; r++)
+            std::fprintf(f, "---- %s\n%.*s\n", ir[r].name, int(text[r].size()), text[r].data());
+    }
+    if (f) std::fclose(f);
+}
+
 VkPipeline compile(PipeBuild& b) {
     VkPipeline p = VK_NULL_HANDLE;
+    const bool stats = pipe_stats_wanted(b.fs_hash);
+    if (stats)
+        b.ci.flags |= VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR | VK_PIPELINE_CREATE_CAPTURE_INTERNAL_REPRESENTATIONS_BIT_KHR;
     const uint64_t t0 = plat::monotonic_ns();
     VkResult made = p_vkCreateGraphicsPipelines(vk_device(), b.cache, 1, &b.ci, nullptr, &p);
     note_pipeline_created(plat::monotonic_ns() - t0, t_worker);
@@ -369,6 +421,7 @@ VkPipeline compile(PipeBuild& b) {
     } else if (g_trace) {
         log("nvn/vk: pipeline: %s + %s", b.vs_hash.c_str(), b.fs_hash.c_str());
     }
+    if (stats && p) pipe_stats_log(b, p);
     return p;
 }
 

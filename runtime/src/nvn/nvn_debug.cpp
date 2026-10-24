@@ -354,7 +354,7 @@ void frame_dump_write(const GpuImage& img, uint64_t frame, const char* suffix) {
 
 namespace {
 
-constexpr uint32_t kMarks = 1024;
+constexpr uint32_t kMarks = 8192;
 VkQueryPool g_queries = VK_NULL_HANDLE;
 std::vector<std::string> g_labels;
 std::map<std::string, std::pair<double, uint64_t>> g_totals;  // label -> (ms, passes)
@@ -363,7 +363,15 @@ double g_period_ns = 1.0;
 }  // namespace
 
 bool gpu_profile_on() {
-    static const bool on = std::getenv("NX_GPU_PROFILE") && std::atoi(std::getenv("NX_GPU_PROFILE")) == 1;
+    static const bool on = std::getenv("NX_GPU_PROFILE") && (std::atoi(std::getenv("NX_GPU_PROFILE")) == 1 ||
+                                                             std::atoi(std::getenv("NX_GPU_PROFILE")) == 2);
+    return on;
+}
+
+// NX_GPU_PROFILE=2: a mark before every draw as well, labelled by its shaders. On a tiler the times inside a pass
+// only mean something when the driver renders to memory directly (Turnip: TU_DEBUG=sysmem).
+bool gpu_profile_draws() {
+    static const bool on = std::getenv("NX_GPU_PROFILE") && std::atoi(std::getenv("NX_GPU_PROFILE")) == 2;
     return on;
 }
 
@@ -409,7 +417,7 @@ void gpu_profile_log(uint64_t frames) {
     double total = 0;
     for (auto& e : v) total += e.first;
     log("gpu profile: %8.2f ms/frame in all, %zu labels", total / double(frames), v.size());
-    for (size_t k = 0; k < v.size() && k < 40; k++)
+    for (size_t k = 0; k < v.size() && k < (gpu_profile_draws() ? 80u : 40u); k++)
         log("gpu profile: %8.2f ms/frame  %s (%llu passes)", v[k].first / double(frames), v[k].second.c_str(),
             (unsigned long long)g_totals[v[k].second].second);
     g_totals.clear();
@@ -611,6 +619,13 @@ void zero_draws_log() {
     log("zero draws: %zu of %zu shader pairs produced no pixel", zero.size(), g_zero_stats.size());
     for (size_t k = 0; k < zero.size() && k < 25; k++)
         log("zero draws: %6llu x %s", (unsigned long long)zero[k].first, zero[k].second.c_str());
+    // And the pairs that pass the most samples per draw: what fills the screen, so what the pixel shading costs.
+    std::vector<std::pair<uint64_t, std::string>> most;
+    for (auto& [label, z] : g_zero_stats)
+        if (z.draws) most.push_back({z.samples / z.draws, label});
+    std::sort(most.rbegin(), most.rend());
+    for (size_t k = 0; k < most.size() && k < 15; k++)
+        log("zero draws: most samples: %9llu per draw  %s", (unsigned long long)most[k].first, most[k].second.c_str());
     g_zero_stats.clear();
 }
 
