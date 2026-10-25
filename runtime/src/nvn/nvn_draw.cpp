@@ -470,6 +470,28 @@ bool draw(VkCommandBuffer cb, const Targets& t, uint32_t mode, bool indexed, con
         // laid out over the 16:9 part like the rest of the layer; it is stretched back over the whole target.
         else if (samples_wide) key.uw_x = g_uw.ax() < 1.0f ? 1.0f / g_uw.ax() : -1.0f / g_uw.ay();
     }
+    // A quad given in screen units by a vertex shader with no projection (position * 2; the post passes use it for the
+    // whole screen) that covers only part of the screen is UI: the NookPhone's shadow mask, drawn unsqueezed, showed
+    // as a dark band beside the phone. Its first vertices decide (positions within +-0.5).
+    if (aniso && cam_patch && ui_pick && key.uw_x == 0 && !uw_vs_scaled(vs) && !g_state.attribs.empty() &&
+        !g_state.streams.empty()) {
+        const VertexAttrib& a = g_state.attribs[0];
+        const uint32_t stride = a.stream < g_state.streams.size() ? g_state.streams[a.stream].stride : 0;
+        const Range& vb = g_state.vertex_buffers[a.stream < 16 ? a.stream : 0];
+        const uint64_t first = uint64_t(std::max(0, indexed ? c.i[1] : c.i[0]));
+        float mx = 0, my = 0;
+        bool ok = stride >= 8 && vb.address;
+        for (uint32_t v = 0; ok && v < 4; v++) {
+            const uint64_t at = (first + v) * stride + a.offset;
+            const auto* f = at + 8 <= vb.size ? reinterpret_cast<const float*>(guest_bytes(vb.address + at)) : nullptr;
+            if (!f || !std::isfinite(f[0]) || !std::isfinite(f[1]) || std::fabs(f[0]) > 0.51f || std::fabs(f[1]) > 0.51f) {
+                ok = false;
+                break;
+            }
+            mx = std::max(mx, std::fabs(f[0])), my = std::max(my, std::fabs(f[1]));
+        }
+        if (ok && (mx < 0.49f || my < 0.49f)) key.uw_x = ui_x = g_uw.ax() < 1.0f ? g_uw.ax() : -g_uw.ay();
+    }
     // A pass over the whole widened target (not the squeezed UI) sees gl_FragCoord in the game's 16:9 units.
     static const bool fc_off = std::getenv("NX_UW_FRAGCOORD") && std::getenv("NX_UW_FRAGCOORD")[0] == '0';
     if (aniso && !fc_off && fs_reads_fragcoord(fs)) {
