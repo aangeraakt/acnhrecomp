@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <string>
 #include <cstring>
+#include <map>
 #include <set>
 
 #include "nvn_draw_state.h"
@@ -270,6 +271,7 @@ const char* const kDrawParts[] = {"textures", "build_sets", "inputs", "pass+key+
                                   "bs:buffers", "bs:textures", "bind:resolve", "bind:update", "tex:gather"};
 constexpr int kDrawPartCount = 11;
 uint64_t g_draw_part[kDrawPartCount] = {}, g_draw_mark = 0, g_draw_timed = 0;
+std::map<std::string, uint64_t> g_draws_by_target;
 bool draw_timing() {
     static const bool on = std::getenv("NX_DRAW_TIMING") != nullptr;
     return on;
@@ -846,6 +848,14 @@ bool draw_call(VkCommandBuffer cb, const Targets& t, uint32_t mode, bool indexed
     const bool r = draw(cb, t, mode, indexed, c);
     draw_part(5);
     g_draw_timed++;
+    {   // draws per target size (and depth-only), logged with the timing
+        GpuImage* img = t.color_count && t.colors[0] ? image_of(t.colors[0]) : nullptr;
+        GpuImage* dimg = !img && t.depth ? image_of(t.depth) : nullptr;
+        char k[48];
+        std::snprintf(k, sizeof k, "%ux%u%s", img ? img->width : dimg ? dimg->width : 0,
+                      img ? img->height : dimg ? dimg->height : 0, dimg ? "d" : "");
+        g_draws_by_target[k]++;
+    }
     return r;
 }
 
@@ -871,6 +881,13 @@ void draw_timing_submit() {
         double(g_draw_timed) / 300.0, total / 1000.0, line.c_str());
     g_draw_timed = 0;
     if (ab) g_ab_new = !g_ab_new;
+    std::vector<std::pair<uint64_t, std::string>> v;
+    for (auto& [k, n] : g_draws_by_target) v.push_back({n, k});
+    std::sort(v.rbegin(), v.rend());
+    std::string by;
+    for (size_t i = 0; i < v.size() && i < 12; i++) by += " " + v[i].second + ":" + std::to_string(v[i].first / 300);
+    log("draw timing: draws per submit by target:%s", by.c_str());
+    g_draws_by_target.clear();
 }
 void dispatch_call(VkCommandBuffer cb, const Cmd& c) { dispatch(cb, c); }
 

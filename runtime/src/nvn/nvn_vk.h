@@ -280,6 +280,20 @@ void gpu_busy_part_begin(uint32_t slot, uint32_t part, VkCommandBuffer cb);
 void gpu_busy_part_end(uint32_t slot, uint32_t part, VkCommandBuffer cb);
 void gpu_busy_retired(uint32_t slot, uint64_t queued);
 void gpu_busy_log(uint64_t frames);
+// nvn_vk_defer.cpp: the replay's Vulkan recording on a thread of its own. vk_defer_install swaps the entry points it
+// covers (after the device is made); inside a VkDeferScope the replay thread's calls go to the recorder; vk_defer_drain
+// waits until the recorder ran everything queued.
+void vk_defer_install();
+void vk_defer_drain();
+class VkDeferScope {
+public:
+    VkDeferScope();
+    ~VkDeferScope();
+    VkDeferScope(const VkDeferScope&) = delete;
+    VkDeferScope& operator=(const VkDeferScope&) = delete;
+private:
+    bool on_ = false;
+};
 void gpu_busy_note_pass(const char* label);  // the label of the part being recorded, if it has none yet
 bool gpu_profile_draws();  // NX_GPU_PROFILE=2: and a mark per draw
 void gpu_profile_begin(VkCommandBuffer cb);

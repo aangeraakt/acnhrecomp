@@ -329,6 +329,7 @@ bool init() {
     dci.pNext = &features;
     if (!check(p_create_device(g_physical, &dci, nullptr, &g_device), "vkCreateDevice")) return false;
     p_vkGetDeviceQueue(g_device, g_family, 0, &g_queue);
+    vk_defer_install();  // nvn_vk_defer.cpp
     static const bool ui_off = std::getenv("NX_UI") && std::getenv("NX_UI")[0] == '0';  // NX_UI=0: no settings screen
     if ((!plat::headless() || std::getenv("NX_UI_OPEN")) && !ui_off)  // the settings screen (ui/ui.cpp)
         ui::ui_vulkan_ready(reinterpret_cast<PFN_vkGetInstanceProcAddr>(g_gipa), g_instance, g_physical, g_device, g_family,
@@ -677,6 +678,7 @@ void gpu_submit(const std::vector<std::shared_ptr<CmdList>>& lists, std::shared_
         free_retired_images(frame_completed());
     }
     if (!begin(true)) return;
+    VkDeferScope defer;  // the replay's Vulkan calls on the recorder thread (nvn_vk_defer.cpp), drained by the end
     draw_begin_submit();
     gpu_profile_begin(g_cb);
     zero_draws_begin_submit(g_cb);
