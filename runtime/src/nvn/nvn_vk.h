@@ -34,6 +34,9 @@ struct GpuImage {
     uint32_t nvn_format = 0;  // the texture's NVN format
     bool uw = false;          // a scaled screen-sized render target (nvn_ultrawide.cpp)
     float sx = 1, sy = 1;     // its size over the game's (width / base_w, height / base_h)
+    // The last two frames (g_frame) it was rendered in: a target drawn in consecutive frames is redrawn every frame
+    // (pipeline_skip_allowed may skip a draw into it while its pipeline compiles; one drawn once, a LUT, may not).
+    uint64_t drawn_frame = 0, drawn_before = 0;
 };
 
 VkDevice vk_device();

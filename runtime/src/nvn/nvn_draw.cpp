@@ -134,6 +134,8 @@ void begin_rendering(VkCommandBuffer cb, const Targets& t) {
         if (img->layout == VK_IMAGE_LAYOUT_UNDEFINED && !load_undefined) fresh |= 1u << k;
         transition(cb, *img, VK_IMAGE_LAYOUT_GENERAL);  // rendered images stay GENERAL (sampled while rendered)
         img->rendered = true;
+        if (const uint64_t f = g_frame.load(std::memory_order_relaxed); img->drawn_frame != f)
+            img->drawn_before = img->drawn_frame, img->drawn_frame = f;
         static int logged_3d = 0;
         static const bool trace_3d = std::getenv("NX_TRACE_3D") != nullptr;
         if (trace_3d && img->view_type == VK_IMAGE_VIEW_TYPE_3D && logged_3d++ < 16)
@@ -164,6 +166,8 @@ void begin_rendering(VkCommandBuffer cb, const Targets& t) {
         if (dimg->layout == VK_IMAGE_LAYOUT_UNDEFINED && !load_undefined) fresh |= 1u << 8;
         transition(cb, *dimg, VK_IMAGE_LAYOUT_GENERAL);
         dimg->rendered = true;
+        if (const uint64_t f = g_frame.load(std::memory_order_relaxed); dimg->drawn_frame != f)
+            dimg->drawn_before = dimg->drawn_frame, dimg->drawn_frame = f;
         uint32_t level = std::min<uint32_t>(t.views.level[8], dimg->levels - 1);
         depth.imageView = attachment_view(*dimg, level, t.views.layer[8]);
         depth.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
@@ -540,7 +544,10 @@ bool draw(VkCommandBuffer cb, const Targets& t, uint32_t mode, bool indexed, con
     }
     {
         GpuImage* ti = t.color_count && t.colors[0] ? image_of(t.colors[0]) : t.depth ? image_of(t.depth) : nullptr;
-        pipeline_skip_allowed(ti && ti->uw);
+        // Screen targets, and other targets drawn in the frame before too (redrawn every frame: shadow maps, the
+        // post chain): a skipped draw is back the next frame. A target drawn once (a room's colour LUT) waits.
+        const uint64_t f = g_frame.load(std::memory_order_relaxed);
+        pipeline_skip_allowed(ti && (ti->uw || (ti->drawn_before && ti->drawn_before + 1 >= f)));
     }
     VkPipeline pipeline = graphics_pipeline(key, layout);
     if (!pipeline) {
