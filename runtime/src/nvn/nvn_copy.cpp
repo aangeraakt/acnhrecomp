@@ -236,6 +236,13 @@ void replay_copy(VkCommandBuffer cb, const Cmd& c, const CmdList& list) {
         log("cubes: copy %llx -> %llx level %u layer %u+%u (z %d depth %d view layer %u) %dx%d", (unsigned long long)c.a[0],
             (unsigned long long)c.a[1], ds.mipLevel, ds.baseArrayLayer, ds.layerCount, info.dst[2], info.dst[5],
             info.dst_view.min_layer, info.dst[3], info.dst[4]);
+    static int logged_3d = 0;
+    static const bool trace_3d = std::getenv("NX_TRACE_3D") != nullptr;
+    if (trace_3d && (s3d || d3d) && logged_3d++ < 24)
+        log("nvn: copy %llx -> %llx with a 3D image: formats %d -> %d, %dx%d z %d depth %d layer %u+%u -> %dx%d z %d depth %d "
+            "layer %u+%u", (unsigned long long)c.a[0], (unsigned long long)c.a[1], int(src->format), int(dst->format), sw,
+            sh, info.src[2], info.src[5], ss.baseArrayLayer, ss.layerCount, dw, dh, info.dst[2], info.dst[5],
+            ds.baseArrayLayer, ds.layerCount);
     VkImageLayout sly = same ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     VkImageLayout dly = same ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     transition(cb, *src, sly);

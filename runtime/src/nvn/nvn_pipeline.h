@@ -80,6 +80,9 @@ struct PipelineKey {
     float uw_x = 0;
 };
 VkPipeline graphics_pipeline(const PipelineKey& key, const ProgramLayout& layout);
+// Under NX_ASYNC_PIPELINES, whether the next graphics_pipeline may skip its draw while the pipeline compiles: only a
+// draw into a screen target, which the game draws again every frame (nvn_draw.cpp sets it per draw).
+void pipeline_skip_allowed(bool allowed);
 // The pipelines an earlier session built (<pipeline cache>.keys): a canonical key with its two shaders by hash
 // (nvn_pipeline_cache.cpp). pipeline_warm_step, once per submit, compiles them on worker threads as the game loads
 // their shaders, and collects finished compiles.
@@ -92,7 +95,9 @@ void warm_record(const PipelineKey& canonical);  // a pipeline this session buil
 void pipeline_warm_step();
 bool depth_remap();  // NX_CLIP_Z_PATCH: clip z -w..w mapped in the vertex shaders, not by VK_EXT_depth_clip_control
 bool patch_clip_z(const std::vector<uint32_t>& in, std::vector<uint32_t>& out);  // nvn_spirv_clip.cpp
-void clip_z_module(const ShaderInfo* s, std::vector<uint32_t>& code);             // patch_clip_z if depth_remap
+void clip_z_module(const ShaderInfo* s, std::vector<uint32_t>& code);
+bool patch_nan_coords(const std::vector<uint32_t>& in, std::vector<uint32_t>& out);  // nvn_spirv_nan.cpp
+void nan_coords_module(std::vector<uint32_t>& code);  // NaN texture coordinates read texel 0, as on Maxwell             // patch_clip_z if depth_remap
 
 // Integer vertex inputs (nvn_spirv_patch.cpp): the kind of an NVN attribute format (0 float, 1 unsigned bits,
 // 2 signed bits), and a copy of a module with those locations declared as integers and bitcast to float on load.

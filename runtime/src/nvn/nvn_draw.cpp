@@ -134,6 +134,11 @@ void begin_rendering(VkCommandBuffer cb, const Targets& t) {
         if (img->layout == VK_IMAGE_LAYOUT_UNDEFINED && !load_undefined) fresh |= 1u << k;
         transition(cb, *img, VK_IMAGE_LAYOUT_GENERAL);  // rendered images stay GENERAL (sampled while rendered)
         img->rendered = true;
+        static int logged_3d = 0;
+        static const bool trace_3d = std::getenv("NX_TRACE_3D") != nullptr;
+        if (trace_3d && img->view_type == VK_IMAGE_VIEW_TYPE_3D && logged_3d++ < 16)
+            log("nvn: render into 3D texture %llx (%ux%ux%u) slice %u level %u", (unsigned long long)t.colors[k],
+                img->width, img->height, img->depth, t.views.layer[k], t.views.level[k]);
         uint32_t level = std::min<uint32_t>(t.views.level[k], img->levels - 1);
         formats[k] = view_format(*img, t.views.format[k]);
         colors[k].imageView = attachment_view(*img, level, t.views.layer[k], formats[k]);
@@ -498,6 +503,10 @@ bool draw(VkCommandBuffer cb, const Targets& t, uint32_t mode, bool indexed, con
                 g_state.depth.depth_test, g_state.depth.depth_write, g_state.color.blend_enable[0],
                 g_state.viewport[0], g_state.viewport[1], g_state.viewport[2], g_state.viewport[3]);
         }
+    }
+    {
+        GpuImage* ti = t.color_count && t.colors[0] ? image_of(t.colors[0]) : t.depth ? image_of(t.depth) : nullptr;
+        pipeline_skip_allowed(ti && ti->uw);
     }
     VkPipeline pipeline = graphics_pipeline(key, layout);
     if (!pipeline) {

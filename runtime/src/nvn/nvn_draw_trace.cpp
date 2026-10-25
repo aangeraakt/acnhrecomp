@@ -336,6 +336,12 @@ void frame_sig_flush(uint64_t presents) {
 
 namespace nx::nvn::replay {
 
+// The memory of the 3D textures made so far (NX_TRACE_3D; nvn_image.cpp adds them).
+std::vector<uint64_t>& trace_3d_memories() {
+    static std::vector<uint64_t> v;
+    return v;
+}
+
 void trace_draw(const Targets& t, uint32_t mode, bool indexed, const Cmd& c, const ShaderInfo* vs,
                 const ShaderInfo* fs, const TexBindings& tex_bindings, const std::vector<uint64_t>& handles) {
     // Always: the first draws with a huge vertex or instance count (a GPU hang candidate).
@@ -345,6 +351,28 @@ void trace_draw(const Targets& t, uint32_t mode, bool indexed, const Cmd& c, con
         log("nvn: huge draw %llu: vs %s fs %s %s count %u x%u", (unsigned long long)g_stats.done, vs->hash.c_str(),
             fs ? fs->hash.c_str() : "-", indexed ? "indexed" : "arrays", count, instances);
     trace_cube_draw(t, vs, fs, tex_bindings, handles);
+    // NX_TRACE_3D=1: draws into a slice of a 3D texture (a colour-grading LUT), briefly (400 at most).
+    static const bool trace_3d = std::getenv("NX_TRACE_3D") != nullptr;
+    static int traced_3d = 0;
+    // And draws into a 2D target over the memory of a 3D texture sampled since (an alias of the LUT).
+    if (trace_3d && t.color_count && t.colors[0] && traced_3d < 400)
+        if (Texture* tt = get<Texture>(t.colors[0]))
+            for (uint64_t m : trace_3d_memories())
+                if (tt->memory && tt->target != 2 && tt->memory <= m && m < tt->memory + std::max<uint64_t>(tt->storage_size, 1)) {
+                    traced_3d++;
+                    log("3d alias draw %llu: 2D target %llx (%ux%u fmt %#x mem %llx +%llx) over a 3D texture's memory %llx, "
+                        "slice %u fs %s", (unsigned long long)g_stats.done, (unsigned long long)t.colors[0], tt->width,
+                        tt->height, tt->format, (unsigned long long)tt->memory, (unsigned long long)tt->storage_size,
+                        (unsigned long long)m, t.views.layer[0], fs ? fs->hash.c_str() : "-");
+                }
+    if (trace_3d && t.color_count && t.colors[0] && traced_3d < 400)
+        if (GpuImage* img = image_of(t.colors[0]); img && img->view_type == VK_IMAGE_VIEW_TYPE_3D) {
+            traced_3d++;
+            log("3d draw %llu: target %llx (%ux%ux%u) slice %u level %u fs %s count %u x%u frame %llu",
+                (unsigned long long)g_stats.done, (unsigned long long)t.colors[0], img->width, img->height, img->depth,
+                t.views.layer[0], t.views.level[0], fs ? fs->hash.c_str() : "-", count, instances,
+                (unsigned long long)g_frame.load(std::memory_order_relaxed));
+        }
     frame_sig_draw(t, indexed, count, instances, fs, tex_bindings, handles);
     // NX_TRACE_DRAWS=<first draw>: logs 80 draws from there.
     static const char* trace_env = std::getenv("NX_TRACE_DRAWS");

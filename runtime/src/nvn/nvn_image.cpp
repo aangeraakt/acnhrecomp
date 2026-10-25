@@ -5,6 +5,7 @@
 #include <memory>
 #include <tuple>
 
+#include "nvn_draw_state.h"
 #include "nvn_ultrawide.h"
 #include "nvn_vk.h"
 
@@ -167,6 +168,12 @@ GpuImage* image_of(uint64_t guest) {
     uint32_t largest = std::max({img->width, img->height, img->depth}), fit = 1;
     while (largest >>= 1) fit++;
     img->levels = std::min(img->levels, fit);
+    if (is3d && std::getenv("NX_TRACE_3D")) {
+        log("3d texture %llx: %ux%ux%u fmt %#x levels %u flags %#x mem %llx +%llx", (unsigned long long)guest, t->width,
+            t->height, t->depth, t->format, t->levels, t->flags, (unsigned long long)t->memory,
+            (unsigned long long)t->storage_size);
+        if (t->memory) replay::trace_3d_memories().push_back(t->memory);
+    }
     img->view_type = is3d             ? VK_IMAGE_VIEW_TYPE_3D
                      : t->target == 9 ? VK_IMAGE_VIEW_TYPE_CUBE_ARRAY
                      : cube           ? VK_IMAGE_VIEW_TYPE_CUBE

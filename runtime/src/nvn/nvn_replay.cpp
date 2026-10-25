@@ -7,6 +7,7 @@
 
 #include "nvn_draw_state.h"
 #include "nvn_vk.h"
+#include "platform.h"
 
 namespace nx::nvn {
 
@@ -35,15 +36,37 @@ std::shared_ptr<CmdList> submit_command_list(uint64_t handle) {
     return l;
 }
 
+// Live: a file trace_cmds ("<count>") in the data folder traces the next <count> ops as NX_TRACE_CMDS does (checked
+// once a second at a top-level list, then deleted).
+int live_trace_cmds() {
+    static int n = 0;
+    static uint64_t next = 0;
+    if (uint64_t now = plat::monotonic_ns(); now >= next) {
+        next = now + 1'000'000'000;
+        const std::string path = plat::data_root() + "/trace_cmds";
+        if (FILE* f = plat::fopen_utf8(path, "rb")) {
+            if (std::fscanf(f, "%d", &n) != 1) n = 0;
+            std::fclose(f);
+            std::remove(path.c_str());
+            log("trace_cmds: the next %d ops (from draw %llu)", n, (unsigned long long)replay::g_stats.done);
+        }
+    }
+    int r = n;
+    n = 0;
+    return r;
+}
+
 void replay_list(VkCommandBuffer cb, Targets& st, const CmdList& list, int depth) {
     if (skin_lists_on()) skin_list_replayed(list, depth);
+    static int live_n = 0;
+    if (depth == 0 && live_n <= 0) live_n = live_trace_cmds();
     for (const Cmd& c : list.cmds) {
         cb = frame_chunk(cb, replay::g_stats.done, pass_open());  // part of the submit queued early (PLAN.md R1)
         // NX_TRACE_CMDS=<first draw>: the ops replayed from that draw on (20000), with n, mask and a[0].
         static const char* tc = std::getenv("NX_TRACE_CMDS");
         static const uint64_t tc_from = tc ? std::strtoull(tc, nullptr, 10) : 0;
         static int tc_n = 0;
-        if (tc && replay::g_stats.done >= tc_from && tc_n++ < 20000)
+        if ((tc && replay::g_stats.done >= tc_from && tc_n++ < 20000) || live_n-- > 0)
             log("cmd after draw %llu: op %u n %u mask %x a0 %llx a1 %llx i %d %d %d %d f %g %g %g %g depth %d",
                 (unsigned long long)replay::g_stats.done, unsigned(c.op), c.n, c.mask, (unsigned long long)c.a[0],
                 (unsigned long long)c.a[1], c.i[0], c.i[1], c.i[2], c.i[3], c.f[0], c.f[1], c.f[2], c.f[3], depth);

@@ -317,8 +317,15 @@ uint32_t bits_of(float f) {
     return u;
 }
 
+// A remembered object's memory can be unmapped since (the game shrinks its heap, unmaps physical memory): reading it
+// then crashed the game at the next aspect change. Read only what the memory map says is still readable.
+bool readable(uint64_t object, uint64_t size) {
+    const VmInfo v = vm_query(object);
+    return v.state != kMemFree && v.state != kMemInaccessible && (v.perm & 1) && object + size <= v.addr + v.size;
+}
+
 bool is_projection(uint64_t object) {
-    return *reinterpret_cast<volatile uint64_t*>(object) == kModuleBase + kProjectionVtable;
+    return readable(object, 0xC0) && *reinterpret_cast<volatile uint64_t*>(object) == kModuleBase + kProjectionVtable;
 }
 
 // One projection for the wanted k (under g_cam_lock). `dirty`: mark it for sead to make the matrix again.
@@ -396,7 +403,7 @@ struct Ortho {
 std::unordered_map<uint64_t, Ortho> g_orthos;  // under g_cam_lock
 
 bool is_ortho(uint64_t object) {
-    return *reinterpret_cast<volatile uint64_t*>(object) == kModuleBase + kOrthoVtable;
+    return readable(object, 0xC0) && *reinterpret_cast<volatile uint64_t*>(object) == kModuleBase + kOrthoVtable;
 }
 
 // One ortho projection for the wanted k (under g_cam_lock).

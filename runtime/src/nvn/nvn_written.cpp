@@ -305,6 +305,15 @@ namespace nx::nvn {
 // the words the GPU changed go back. NX_WRITE_BACK_WHOLE=1: the old whole-range copy.
 void apply_write_back(const WriteBack& w) {
     static const bool whole = std::getenv("NX_WRITE_BACK_WHOLE") != nullptr;
+    static const bool trace_3d = std::getenv("NX_TRACE_3D") != nullptr;
+    if (trace_3d)
+        for (uint64_t m : replay::trace_3d_memories()) {
+            const uint64_t to = reinterpret_cast<uint64_t>(w.to);
+            static int logged = 0;
+            if (to <= m + 0x1000 && m < to + w.size && logged++ < 40)
+                log("3d write-back: %llx+%llx over a 3D texture's memory %llx", (unsigned long long)to,
+                    (unsigned long long)w.size, (unsigned long long)m);
+        }
     if (whole || !w.before || w.before->size() < w.size) {
         std::memcpy(w.to, w.from, w.size);
         return;

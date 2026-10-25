@@ -67,6 +67,7 @@ void trace_nan_write_back(const uint8_t* from, const uint8_t* to, uint64_t size)
 void trace_pass(const char* what, const Targets& t, uint32_t a, uint32_t b);
 using TexBindings = std::vector<std::pair<const ShaderInfo*, const DescriptorBinding*>>;
 // NX_TRACE_DRAWS & co (docs/nvn/DEBUG.md): logs a replayed draw with its state, when the switches select it.
+std::vector<uint64_t>& trace_3d_memories();  // NX_TRACE_3D (nvn_draw_trace.cpp)
 void trace_draw(const Targets& t, uint32_t mode, bool indexed, const Cmd& c, const ShaderInfo* vs,
                 const ShaderInfo* fs, const TexBindings& tex_bindings, const std::vector<uint64_t>& handles);
 

@@ -106,6 +106,7 @@ VkShaderModule module_of(const ShaderInfo* s, const uint8_t* kinds = nullptr, ui
             else log("nvn/vk: shader %s: screen scale not patched", s->hash.c_str());
         }
         if (s->stage == ShaderStage::Vertex) clip_z_module(s, code);  // NX_CLIP_Z_PATCH (nvn_spirv_clip.cpp)
+        nan_coords_module(code);  // nvn_spirv_nan.cpp
         if (const char* opt = std::getenv("NX_SPIRV_OPT"); opt || std::getenv("NX_SPIRV_TOOL")) {  // diagnostic: each module through `spirv-opt <flags>` (NX_SPIRV_OPT) or `<tool> in out` (NX_SPIRV_TOOL) first
             static int n = 0;
             std::string in = "/tmp/nx_spv_" + std::to_string(process_id()) + "_" + std::to_string(n++) + ".spv", out = in + ".out";
@@ -595,12 +596,17 @@ PKey bytes_of(const PipelineKey& k) {
 // pipeline compiles on a worker thread and the next frames draw it) instead of stalling the replay: arriving on the
 // island went from a 755 ms freeze to 98 ms on the M1. Off by default: a draw the game makes once (a scene's
 // precomputed lighting) stays missing, and the Nook Inc. counter scene drew only its UI over black.
+// Only draws into screen targets are skipped (pipeline_skip_allowed): what the game draws once into a texture of
+// its own (the colour-grading LUT of a room, rendered slice by slice when it loads) was lost for good, and the tent's
+// picture came out black, or white over stale memory.
+bool g_skip_allowed = true;
+
 bool async_skip() {
     static const bool on = [] {
         const char* e = std::getenv("NX_ASYNC_PIPELINES");
         return e && e[0] == '1' && pool().threads > 0;
     }();
-    return on;
+    return on && g_skip_allowed;
 }
 
 // The pipeline for a canonical key: built, in flight (waited for, or null under async_skip), or compiled now.
@@ -648,6 +654,8 @@ VkPipeline pipeline_for(const PipelineKey& canon, const ProgramLayout& layout, b
 }
 
 }  // namespace
+
+void pipeline_skip_allowed(bool allowed) { g_skip_allowed = allowed; }
 
 VkPipeline graphics_pipeline(const PipelineKey& key, const ProgramLayout& layout) {
     // By the key's bytes, as before, but hashed (nvn_pipeline.h) instead of a ~700-byte std::string built and
@@ -1203,6 +1211,11 @@ VkImageView storage_view(VkCommandBuffer cb, uint64_t texture, const ImageShape&
     if (img && img->storage) {
         transition(cb, *img, VK_IMAGE_LAYOUT_GENERAL);
         img->rendered = true;  // the shader may write it
+        static int logged_3d = 0;
+        static const bool trace_3d = std::getenv("NX_TRACE_3D") != nullptr;
+        if (trace_3d && img->view_type == VK_IMAGE_VIEW_TYPE_3D && logged_3d++ < 8)
+            log("nvn: 3D texture %llx (%ux%ux%u) bound as a storage image (view type %d)", (unsigned long long)texture,
+                img->width, img->height, img->depth, int(view_type(shape)));
         ViewInfo v = view ? *view : ViewInfo{};
         v.levels = 1, v.swizzle = 0;  // storage views: one level, identity
         if (VkImageView iv = view_of(*img, view_type(shape), v)) return iv;

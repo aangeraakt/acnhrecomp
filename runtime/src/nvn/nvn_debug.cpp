@@ -452,7 +452,30 @@ bool debug_snap_wanted(uint64_t draw) {
         }
         return v;
     }();
-    return std::find(list.begin(), list.end(), draw) != list.end();
+    // Live (while playing): a file snap_draws in the data folder, "<offset>,<offset>,..." counted from the draw at
+    // which it is read (checked once a second, then deleted): those draws are snapped as listed in NX_SNAP_DRAWS.
+    static std::vector<uint64_t> live;
+    static uint64_t next_check = 0;
+    if (uint64_t now = plat::monotonic_ns(); now >= next_check) {
+        next_check = now + 1'000'000'000;
+        const std::string path = plat::data_root() + "/snap_draws";
+        if (FILE* f = plat::fopen_utf8(path, "rb")) {
+            char buf[4096] = {};
+            std::fread(buf, 1, sizeof buf - 1, f);
+            std::fclose(f);
+            std::remove(path.c_str());
+            live.clear();
+            for (char* e = buf; *e;) {
+                char* end = nullptr;
+                uint64_t n = std::strtoull(e, &end, 10);
+                if (end == e) break;
+                live.push_back(draw + n);
+                e = *end == ',' ? end + 1 : end;
+            }
+            log("snap_draws: %zu draws from draw %llu", live.size(), (unsigned long long)draw);
+        }
+    }
+    return std::find(list.begin(), list.end(), draw) != list.end() || std::find(live.begin(), live.end(), draw) != live.end();
 }
 
 uint32_t g_snap_layer = 0, g_snap_level = 0;  // which layer and level the next debug_snapshot reads (nvn_draw.cpp)
