@@ -87,7 +87,12 @@ VkShaderStageFlags stage_bit(ShaderStage s) {
 // `kinds`: per vertex input location, 0 float or the integer kind of its attribute format (vertex_int_kind).
 // `unwritten`: fragment input locations the vertex stage does not write (default_unwritten_inputs).
 // `scaled`: the vertex module with the screen scale's specialization constants (gl_Position.xy).
+// Thread-safe: graphics modules are made inside compile(), on the pipeline workers when the compile is asynchronous
+// (the SPIR-V patches and vkCreateShaderModule were 1 ms a module on the replay thread: 5-10 ms when a scene showed
+// new shaders, every session, the disk cache keeping pipelines but not modules).
+std::recursive_mutex g_module_lock;
 VkShaderModule module_of(const ShaderInfo* s, const uint8_t* kinds = nullptr, uint32_t unwritten = 0, bool scaled = false) {
+    std::lock_guard module_lock(g_module_lock);
     static std::map<std::tuple<const ShaderInfo*, std::string, uint32_t, bool>, VkShaderModule> cache;
     // The integer-vertex-input patch (skinned models' bone indices; without it Metal refuses every character's
     // pipeline, DEBUG.md #25/#26). NX_INT_ATTRIBS=0 turns it off.
@@ -357,6 +362,14 @@ struct PipeBuild {
     VkGraphicsPipelineCreateInfo ci{};
     VkPipelineCache cache = VK_NULL_HANDLE;
     std::string vs_hash, fs_hash;
+    // The modules, made in compile() (module_of): per stage the shader and what its module is patched with.
+    struct ModuleReq {
+        const ShaderInfo* s = nullptr;
+        uint8_t kinds[16] = {};
+        bool has_kinds = false;
+        uint32_t unwritten = 0;
+        bool scaled = false;
+    } modules[2];
 };
 
 std::unique_ptr<PipeBuild> prepare_graphics_pipeline(const PipelineKey& key, const ProgramLayout& layout);
@@ -415,6 +428,11 @@ void pipe_stats_log(const PipeBuild& b, VkPipeline p) {
 
 VkPipeline compile(PipeBuild& b) {
     VkPipeline p = VK_NULL_HANDLE;
+    for (uint32_t k = 0; k < b.nstages; k++)
+        if (!b.stages[k].module && b.modules[k].s) {
+            const auto& mr = b.modules[k];
+            b.stages[k].module = module_of(mr.s, mr.has_kinds ? mr.kinds : nullptr, mr.unwritten, mr.scaled);
+        }
     const bool stats = pipe_stats_wanted(b.fs_hash);
     if (stats)
         b.ci.flags |= VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR | VK_PIPELINE_CREATE_CAPTURE_INTERNAL_REPRESENTATIONS_BIT_KHR;
@@ -667,6 +685,7 @@ bool fs_reads_fragcoord(const ShaderInfo* fs) {
     if (!fs) return false;
     auto it = memo.find(fs);
     if (it != memo.end()) return it->second;
+    std::lock_guard module_lock(g_module_lock);
     std::vector<uint32_t> code = patched_spirv(fs, nullptr, 0, nullptr), unused;
     return memo[fs] = patch_fragcoord_scale(code, unused);
 }
@@ -858,7 +877,9 @@ std::unique_ptr<PipeBuild> prepare_graphics_pipeline(const PipelineKey& key, con
         st.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         st.stage = VkShaderStageFlagBits(stage_bit(s->stage));
         const bool scaled = (s == key.vs && key.uw_x != 0) || (s == key.fs && key.fc_x != 0);
-        st.module = module_of(s, s == key.vs ? int_kinds : nullptr, s == key.fs ? unwritten : 0, scaled);
+        auto& mr = B.modules[nstages - 1];  // made in compile(), off the replay thread when that is asynchronous
+        mr.s = s, mr.unwritten = s == key.fs ? unwritten : 0, mr.scaled = scaled;
+        if (s == key.vs && int_kinds) std::memcpy(mr.kinds, int_kinds, sizeof mr.kinds), mr.has_kinds = true;
         st.pName = "main";
         if (scaled) {  // screen scale: constants 0 and 1 of the patched vertex module (nvn_ultrawide.cpp)
             static const VkSpecializationMapEntry entries[2] = {{0, 0, sizeof(float)}, {1, sizeof(float), sizeof(float)}};
