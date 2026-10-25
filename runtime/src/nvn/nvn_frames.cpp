@@ -52,7 +52,7 @@ std::recursive_mutex& gpu_lock();  // nvn_vk.cpp
 namespace {
 
 constexpr uint32_t kMaxSlots = 8;
-constexpr uint32_t kMaxParts = 8;  // command buffers per submit: chunks, the split, the last part
+constexpr uint32_t kMaxParts = 64;  // command buffers per submit: chunks, the split, the last part
 constexpr uint64_t kFenceTimeout = 2'000'000'000ull;  // a frame's work takes milliseconds; longer is a hung shader
 
 struct Slot {
@@ -61,7 +61,7 @@ struct Slot {
     VkCommandBuffer cbs[kMaxParts] = {};  // the parts, queued in order
     VkFence fences[kMaxParts] = {};
     uint32_t part = 0;                    // the part being recorded
-    uint32_t queued = 0;                  // bit k: part k was queued (its fence will signal)
+    uint64_t queued = 0;                  // bit k: part k was queued (its fence will signal)
     uint32_t waited = 0;                  // parts below this were waited for (the ring may reuse their data)
     int split_part = -1;                  // pipelined: the part that ends with the last dispatch
     bool ok = true;                       // the current part is recording (a failed begin leaves nothing to queue)
@@ -294,7 +294,7 @@ int env_int(const char* name) {
 VkCommandBuffer next_part(Slot& s) {
     pass_end_only(s.cbs[s.part], 0);
     gpu_busy_part_end(uint32_t(&s - g_slots), s.part, s.cbs[s.part]);
-    if (s.ok && submit_part(s.cbs[s.part], s.fences[s.part], VK_NULL_HANDLE, VK_NULL_HANDLE)) s.queued |= 1u << s.part;
+    if (s.ok && submit_part(s.cbs[s.part], s.fences[s.part], VK_NULL_HANDLE, VK_NULL_HANDLE)) s.queued |= 1ull << s.part;
     s.part++;
     s.ok = begin_part(s.cbs[s.part]);
     if (s.ok) gpu_busy_part_begin(uint32_t(&s - g_slots), s.part, s.cbs[s.part]);
@@ -426,10 +426,20 @@ VkCommandBuffer frame_split(VkCommandBuffer cb) {
     return next;
 }
 
+// NX_SUBMIT_CHUNK_DRAWS=-1: a part per render pass, cut as a pass begins (with NX_GPU_PROFILE=3: the GPU's time per
+// pass, nvn_gpu_busy.cpp).
+VkCommandBuffer frame_pass_part(VkCommandBuffer cb) {
+    Slot* s = g_current;
+    if (g_chunk_draws != UINT64_MAX || !g_chunking || !s || cb != s->cbs[s->part] || s->part + 2 >= kMaxParts) return cb;
+    g_stats.chunks++;
+    return next_part(*s);
+}
+
 VkCommandBuffer frame_chunk(VkCommandBuffer cb, uint64_t draws, bool pass_open) {
     Slot* s = g_current;
     // Two parts are kept for the split and the last one.
     if (!g_chunking || !s || cb != s->cbs[s->part] || s->part + 2 >= kMaxParts) return cb;
+    if (g_chunk_draws == UINT64_MAX) return cb;  // frame_pass_part cuts
     if (g_chunk_from == UINT64_MAX) g_chunk_from = draws;
     uint64_t since = draws - g_chunk_from;
     if (since < g_chunk_draws || (pass_open && since < 2 * g_chunk_draws)) return cb;
@@ -467,7 +477,7 @@ void frame_submit(VkSemaphore wait, VkSemaphore signal, std::vector<WriteBack> w
     }
     if (s.ok) gpu_busy_part_end(uint32_t(&s - g_slots), s.part, s.cbs[s.part]);
     const bool has_last = s.ok && submit_part(s.cbs[s.part], s.fences[s.part], wait, signal);
-    if (has_last) s.queued |= 1u << s.part;
+    if (has_last) s.queued |= 1ull << s.part;
     if (!s.queued) return;  // nothing ran: no results to copy back, the slot stays free
     s.serial = ++g_submitted;
     s.ring_end = g_head;

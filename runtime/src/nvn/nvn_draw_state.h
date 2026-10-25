@@ -75,6 +75,8 @@ void trace_draw(const Targets& t, uint32_t mode, bool indexed, const Cmd& c, con
 }  // namespace nx::nvn::replay
 
 namespace nx::nvn {
+void draw_part(int k);  // NX_DRAW_TIMING (nvn_draw.cpp): the time since the last mark goes to part k
+bool ab_new();          // NX_AB (nvn_draw.cpp): the change under test is on
 uint64_t submit_start_ns();  // host ns at the start of the submit being replayed
 bool draw_call(VkCommandBuffer cb, const Targets& t, uint32_t mode, bool indexed, const Cmd& c);
 void dispatch_call(VkCommandBuffer cb, const Cmd& c);

@@ -38,6 +38,13 @@ uint64_t g_binds = 0;  // written_bind calls, ever (nvn_frames.cpp: did a dispat
 uint64_t g_shared = 0, g_merged = 0, g_composed = 0, g_indirect = 0;  // for written_log
 
 // The regions overlapping [p, p + size), in address order.
+// Whether [p, p + size) meets a written range, without building the list (asked for every buffer of every draw).
+bool overlaps_any(const uint8_t* p, uint64_t size) {
+    It it = g_regions.upper_bound(p);
+    if (it != g_regions.begin() && std::prev(it)->first + std::prev(it)->second.size > p) return true;
+    return it != g_regions.end() && it->first < p + size;
+}
+
 std::vector<It> overlapping(const uint8_t* p, uint64_t size) {
     std::vector<It> v;
     It it = g_regions.upper_bound(p);
@@ -150,7 +157,7 @@ Upload written_bind(VkCommandBuffer cb, const uint8_t* p, uint64_t size, uint64_
 }
 
 bool written_read(VkCommandBuffer cb, const uint8_t* p, uint64_t size, uint64_t padded, uint64_t align, Upload& out) {
-    if (!p || !size || g_regions.empty() || written_separate()) return false;
+    if (!p || !size || g_regions.empty() || written_separate() || !overlaps_any(p, size)) return false;
     std::vector<It> regions = overlapping(p, size);
     if (regions.empty()) return false;
     if (It it = containing(p, size, padded, align, regions); it != g_regions.end()) {
@@ -176,7 +183,7 @@ Upload read_upload(VkCommandBuffer cb, const uint8_t* p, uint64_t size, uint64_t
 }
 
 bool written_overlaps(const uint8_t* p, uint64_t size) {
-    return p && size && !g_regions.empty() && !overlapping(p, size).empty();
+    return p && size && !g_regions.empty() && overlaps_any(p, size);
 }
 
 bool written_indirect(VkCommandBuffer cb, const uint8_t* p) {

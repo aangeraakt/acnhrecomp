@@ -614,6 +614,85 @@ std::vector<uint32_t> patched_spirv(const ShaderInfo* s, const uint8_t* kinds, u
     return code;
 }
 
+// How far into each set 0 uniform block (binding < 64) the shader reads, in bytes: the end of the furthest element an
+// access chain reaches with a constant index (the translator's blocks are struct { vec4 data[4096]; }). 0: unknown,
+// the shader may read anywhere (a computed index, or the block used other than through such a chain). Uploads pad a
+// block with zeros up to this instead of 4 KB (reads past the data return 0 on Maxwell; Metal reads what follows):
+// three quarters of the bytes copied per frame were that padding.
+void uniform_read_extents(const std::vector<uint32_t>& in, uint32_t (&extent)[64]) {
+    enum : uint32_t {
+        OpConstant = 43, OpTypeArray = 28, OpTypeStruct = 30, DecorationBinding = 33, DecorationDescriptorSet = 34,
+        DecorationArrayStride = 6, StorageUniform = 2,
+    };
+    std::fill(std::begin(extent), std::end(extent), 0u);
+    if (in.size() < 5) return;
+    std::vector<Inst> insts;
+    for (size_t i = 5; i < in.size();) {
+        uint32_t len = in[i] >> 16;
+        if (!len || i + len > in.size()) return;
+        insts.push_back({i, in[i] & 0xffff, len});
+        i += len;
+    }
+    std::map<uint32_t, uint32_t> binding, set, stride, constant, pointee, struct_first, array_elem, var_type;
+    size_t first_function = in.size();
+    for (const Inst& n : insts) {
+        const uint32_t* w = &in[n.at];
+        if (n.op == OpDecorate && n.len >= 4 && w[2] == DecorationBinding) binding[w[1]] = w[3];
+        else if (n.op == OpDecorate && n.len >= 4 && w[2] == DecorationDescriptorSet) set[w[1]] = w[3];
+        else if (n.op == OpDecorate && n.len >= 4 && w[2] == DecorationArrayStride) stride[w[1]] = w[3];
+        else if (n.op == OpConstant && n.len == 4) constant[w[2]] = w[3];
+        else if (n.op == OpTypePointer && n.len == 4) pointee[w[1]] = w[3];
+        else if (n.op == OpTypeStruct && n.len >= 3) struct_first[w[1]] = w[2];
+        else if (n.op == OpTypeArray && n.len == 4) array_elem[w[1]] = w[2];
+        else if (n.op == OpVariable && n.len >= 4 && w[3] == StorageUniform) var_type[w[2]] = w[1];
+        else if (n.op == OpFunction) first_function = std::min(first_function, n.at);
+    }
+    // The blocks: set 0, binding < 64, struct whose member 0 is an array with a stride.
+    std::map<uint32_t, uint32_t> elem_bytes;  // variable -> its array's stride
+    for (auto& [var, ptr] : var_type) {
+        auto b = binding.find(var);
+        if (b == binding.end() || b->second >= 64 || set[var] != 0) continue;
+        auto st = struct_first.find(pointee[ptr]);
+        if (st == struct_first.end() || !array_elem.count(st->second)) continue;
+        auto sd = stride.find(st->second);
+        if (sd == stride.end() || !sd->second) continue;
+        elem_bytes[var] = sd->second;
+    }
+    std::map<uint32_t, uint32_t> reach;  // variable -> bytes; UINT32_MAX: anywhere
+    for (const Inst& n : insts) {
+        if (n.at < first_function) continue;
+        const uint32_t* w = &in[n.at];
+        const bool chain = (n.op == OpAccessChain || n.op == OpInBoundsAccessChain) && n.len >= 4;
+        for (uint32_t k = 1; k < n.len; k++) {
+            auto e = elem_bytes.find(w[k]);
+            if (e == elem_bytes.end()) continue;
+            uint32_t& r = reach[w[k]];
+            if (!(chain && k == 3)) {  // any other use of the block (or a literal that equals its id): anywhere
+                r = UINT32_MAX;
+                continue;
+            }
+            // base, member 0, constant element index
+            auto member = n.len >= 5 ? constant.find(w[4]) : constant.end();
+            auto index = n.len >= 6 ? constant.find(w[5]) : constant.end();
+            if (member == constant.end() || member->second != 0 || index == constant.end() || index->second >= 4096) {
+                r = UINT32_MAX;
+                continue;
+            }
+            if (r != UINT32_MAX) r = std::max(r, (index->second + 1) * e->second);
+        }
+    }
+    uint64_t unknown = 0;  // bindings some variable reads anywhere (two variables may share a binding)
+    for (auto& [var, bytes] : elem_bytes) {
+        auto r = reach.find(var);
+        uint32_t b = binding[var];
+        // Never read: nothing beyond the data is needed (16 bytes). Read anywhere: unknown.
+        if (r != reach.end() && r->second == UINT32_MAX) unknown |= 1ull << b;
+        else extent[b] = std::max(extent[b], r == reach.end() ? 16u : r->second);
+    }
+    for (uint32_t b = 0; b < 64; b++)
+        if (unknown >> b & 1) extent[b] = 0;
+}
+
 uint64_t dynamic_uniform_bindings(const ShaderInfo* s) {
     if (s->masks_known) return s->dynamic_uniforms;
     static std::mutex lock;

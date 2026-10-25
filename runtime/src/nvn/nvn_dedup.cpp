@@ -22,7 +22,7 @@ struct Entry {
 };
 // By host address; several sizes of one address are rare, so the latest one is kept.
 std::map<const uint8_t*, Entry> g_copies;
-uint64_t g_saved = 0, g_copied = 0;
+uint64_t g_saved = 0, g_copied = 0, g_data = 0, g_copies_n = 0, g_big_pads = 0;  // g_data: bytes of guest data among g_copied
 
 // In front of the map (a tree walk per bound buffer of every draw, and most are hits): a slot per address hash with a
 // copy of that address's entry in g_copies. A slot of the current generation always equals the map's entry: both are
@@ -62,7 +62,7 @@ Upload dedup_upload(const uint8_t* p, uint64_t size, uint64_t padded, uint64_t a
     if (padded > size) std::memset(u.ptr + size, 0, padded - size);
     g_copies[p] = {size, padded, u};
     f = {p, g_generation, {size, padded, u}};
-    g_copied += padded;
+    g_copied += padded, g_data += size, g_copies_n++, g_big_pads += padded >= 0x10000;
     return u;
 }
 
@@ -107,8 +107,10 @@ std::array<uint8_t, 0x1000> driver_constants(ShaderStage stage, int st) {
 
 void dedup_log() {
     if (g_copied + g_saved)
-        log("nvn: uploads copied %.1f MB, reused %.1f MB", double(g_copied) / 1e6, double(g_saved) / 1e6);
-    g_copied = g_saved = 0;
+        log("nvn: uploads copied %.1f MB (%.1f MB of data, %llu copies, %llu padded to 64 KB), reused %.1f MB",
+            double(g_copied) / 1e6, double(g_data) / 1e6, (unsigned long long)g_copies_n, (unsigned long long)g_big_pads,
+            double(g_saved) / 1e6);
+    g_copied = g_saved = g_data = g_copies_n = g_big_pads = 0;
 }
 
 }  // namespace nx::nvn::replay

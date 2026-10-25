@@ -221,6 +221,8 @@ struct ShaderInfo {
     // on use, as before.
     bool masks_known = false;
     uint64_t dynamic_uniforms = 0, written_storage = 0;
+    // uniform_read_extents (nvn_spirv_patch.cpp): bytes of each set 0 uniform binding the shader reads; 0 unknown.
+    uint32_t uniform_extent[64] = {};
 };
 
 // Builds a ShaderInfo from a code block, its control section and the SPIR-V words (no I/O). `resources` = the

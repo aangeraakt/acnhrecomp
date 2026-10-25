@@ -61,7 +61,7 @@ void replay_list(VkCommandBuffer cb, Targets& st, const CmdList& list, int depth
     static int live_n = 0;
     if (depth == 0 && live_n <= 0) live_n = live_trace_cmds();
     for (const Cmd& c : list.cmds) {
-        cb = frame_chunk(cb, replay::g_stats.done, pass_open());  // part of the submit queued early (PLAN.md R1)
+        cb = frame_chunk(frame_cb(cb), replay::g_stats.done, pass_open());  // part of the submit queued early (PLAN.md R1)
         // NX_TRACE_CMDS=<first draw>: the ops replayed from that draw on (20000), with n, mask and a[0].
         static const char* tc = std::getenv("NX_TRACE_CMDS");
         static const uint64_t tc_from = tc ? std::strtoull(tc, nullptr, 10) : 0;

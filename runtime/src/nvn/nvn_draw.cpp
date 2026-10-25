@@ -266,8 +266,10 @@ void vertex_read_barrier(VkCommandBuffer cb, const ShaderInfo* vs) {
 
 // NX_DRAW_TIMING=1: where a draw's CPU time goes, by part (the timer register, ~40 ns ticks on Apple silicon; averaged
 // over thousands of draws), logged every 300 submits as microseconds per submit.
-const char* const kDrawParts[] = {"textures", "build_sets", "inputs", "pass+key+pipeline", "bind", "draw+after"};
-uint64_t g_draw_part[6] = {}, g_draw_mark = 0, g_draw_timed = 0;
+const char* const kDrawParts[] = {"textures", "build_sets", "inputs", "pass+key+pipeline", "bind", "draw+after",
+                                  "bs:buffers", "bs:textures", "bind:resolve", "bind:update", "tex:gather"};
+constexpr int kDrawPartCount = 11;
+uint64_t g_draw_part[kDrawPartCount] = {}, g_draw_mark = 0, g_draw_timed = 0;
 bool draw_timing() {
     static const bool on = std::getenv("NX_DRAW_TIMING") != nullptr;
     return on;
@@ -281,11 +283,17 @@ inline uint64_t draw_ticks() {
     return plat::monotonic_ns();
 #endif
 }
-inline void draw_part(int k) {
+}  // namespace
+// NX_AB=1 (with NX_DRAW_TIMING): a change under test runs every other 300 submits (ab_new() true), the old code in
+// between, and the timing lines say which: both halves see the same heat (an M1 Air throttles within minutes).
+bool g_ab_new = true;
+bool ab_new() { return g_ab_new; }
+void draw_part(int k) {
     if (!draw_timing()) return;
     const uint64_t now = draw_ticks();
     g_draw_part[k] += now - g_draw_mark, g_draw_mark = now;
 }
+namespace {
 
 bool draw(VkCommandBuffer cb, const Targets& t, uint32_t mode, bool indexed, const Cmd& c) {
     g_stats.total++;
@@ -437,7 +445,17 @@ bool draw(VkCommandBuffer cb, const Targets& t, uint32_t mode, bool indexed, con
                           t.views.level[0], fs ? fs->hash.c_str() : "-");
             gpu_profile_mark(cb, label);
         }
+        if (gpu_busy_on()) cb = frame_pass_part(cb);
         begin_rendering(cb, tt);
+        if (gpu_busy_on()) {  // NX_GPU_PROFILE=3 with NX_SUBMIT_CHUNK_DRAWS: GPU time by part (nvn_gpu_busy.cpp)
+            GpuImage* img = t.color_count && t.colors[0] ? image_of(t.colors[0]) : nullptr;
+            GpuImage* dimg = t.depth ? image_of(t.depth) : nullptr;
+            char label[128];
+            std::snprintf(label, sizeof label, "%ux%u%s%s fs %s", img ? img->width : dimg ? dimg->width : 0,
+                          img ? img->height : dimg ? dimg->height : 0, t.color_count > 1 ? " mrt" : "",
+                          dimg ? " +depth" : "", fs ? fs->hash.c_str() : "-");
+            gpu_busy_note_pass(label);
+        }
     }
 
     // Pipeline.
@@ -840,7 +858,7 @@ void draw_timing_submit() {
 #endif
     std::string line;
     double total = 0;
-    for (int k = 0; k < 6; k++) {
+    for (int k = 0; k < kDrawPartCount; k++) {
         const double us = double(g_draw_part[k]) * 1e6 / double(freq) / 300.0;
         total += us;
         char b[64];
@@ -848,9 +866,11 @@ void draw_timing_submit() {
         line += b;
         g_draw_part[k] = 0;
     }
-    log("draw timing: %.0f draws per submit, %.2f ms per submit in draws (us:%s)", double(g_draw_timed) / 300.0,
-        total / 1000.0, line.c_str());
+    static const bool ab = std::getenv("NX_AB") != nullptr;
+    log("draw timing%s: %.0f draws per submit, %.2f ms per submit in draws (us:%s)", !ab ? "" : g_ab_new ? " [new]" : " [old]",
+        double(g_draw_timed) / 300.0, total / 1000.0, line.c_str());
     g_draw_timed = 0;
+    if (ab) g_ab_new = !g_ab_new;
 }
 void dispatch_call(VkCommandBuffer cb, const Cmd& c) { dispatch(cb, c); }
 

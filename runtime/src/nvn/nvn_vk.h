@@ -167,6 +167,7 @@ VkCommandBuffer frame_cb(VkCommandBuffer cb);
 // Chunks (nvn_frames.cpp, NX_SUBMIT_CHUNK_DRAWS): for replay_list before each command, with the draws done so far;
 // returns the command buffer to go on with (a new part once enough draws were recorded).
 VkCommandBuffer frame_chunk(VkCommandBuffer cb, uint64_t draws, bool pass_open);
+VkCommandBuffer frame_pass_part(VkCommandBuffer cb);  // NX_SUBMIT_CHUNK_DRAWS=-1: a new part before a pass begins
 // Host time inside vkQueueSubmit (with vkEndCommandBuffer: Metal encoding) and inside vkWaitForFences, running
 // totals in every mode (the synchronous path adds its own).
 struct FrameTimes {
@@ -277,8 +278,9 @@ void janitor_wait(const std::atomic<bool>& done);
 bool gpu_busy_on();
 void gpu_busy_part_begin(uint32_t slot, uint32_t part, VkCommandBuffer cb);
 void gpu_busy_part_end(uint32_t slot, uint32_t part, VkCommandBuffer cb);
-void gpu_busy_retired(uint32_t slot, uint32_t queued);
+void gpu_busy_retired(uint32_t slot, uint64_t queued);
 void gpu_busy_log(uint64_t frames);
+void gpu_busy_note_pass(const char* label);  // the label of the part being recorded, if it has none yet
 bool gpu_profile_draws();  // NX_GPU_PROFILE=2: and a mark per draw
 void gpu_profile_begin(VkCommandBuffer cb);
 void gpu_profile_mark(VkCommandBuffer cb, const std::string& label);
