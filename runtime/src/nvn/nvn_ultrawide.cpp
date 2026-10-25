@@ -122,6 +122,7 @@ Scale wanted(uint64_t present) {
 }  // namespace
 
 float uw_factor() { return g_k.load(std::memory_order_relaxed); }
+float uw_resolution() { return g_s.load(std::memory_order_relaxed); }
 uint32_t uw_generation() { return g_gen.load(std::memory_order_acquire); }
 bool uw_scaling() { return g_k.load(std::memory_order_relaxed) != 1.0f || g_s.load(std::memory_order_relaxed) != 1.0f; }
 
@@ -339,7 +340,15 @@ void rewrite(uint64_t object, Camera& c, float k, bool dirty) {
     else if (!c.aspect_set || a != c.aspect_set) return;  // an aspect of the game's own: not ours to change
     else if (f != c.fov_set) c.fov_base = f;      // the game changed the field of view
     uint32_t fov = c.fov_base;
-    if (k < 1.0f) fov = bits_of(2.0f * std::atan(std::tan(f32_of(c.fov_base) * 0.5f) / k));
+    // A taller screen (4:3, 16:10) keeps the game's vertical field of view and sees less at the sides (Hor-): with
+    // the field made taller (Vert+) the corners showed ground the game had culled, blue blocks at the edges.
+    // NX_UW_VERT_PLUS=1: the taller field as before.
+    // Only the world's cameras: the game's are narrow (a 22 degree vertical field, 0.384 rad). The 3D screens of the UI
+    // (the map app, the NookPhone: 40 degrees, far plane 10000) keep Vert+, or their sides were cut off.
+    // NX_UW_VERT_PLUS=1: Vert+ for all.
+    static const bool vert_plus = std::getenv("NX_UW_VERT_PLUS") && std::getenv("NX_UW_VERT_PLUS")[0] == '1';
+    const bool world = f32_of(c.fov_base) < 0.5f;
+    if (k < 1.0f && (vert_plus || !world)) fov = bits_of(2.0f * std::atan(std::tan(f32_of(c.fov_base) * 0.5f) / k));
     if (a != wide_bits || f != fov) {  // with the half-angle terms the matrix is made from
         float half = f32_of(fov) * 0.5f;
         w[0xA0 / 4] = fov;
@@ -718,6 +727,11 @@ void pane_calculate(CPU& c) {
         if (wide && !tall && hh > H * 0.7f) wide = false;
         if (tall && !wide && hw > W * 0.7f) tall = false;
         full = (wide && kx > 1.0f) || (tall && ky > 1.0f) || (wide && tall);
+        // Already as large as the whole target on the axes that grew (the NookPhone's 2940x2272 frame around its
+        // screen, a glow scaled up by its animation): scaling it moved its cut-out off the phone, a dark band beside it.
+        const float TW = r->second.base[0] * 0.5f * kx, TH = r->second.base[1] * 0.5f * ky;
+        if (full && (kx <= 1.0f || (mx - hw <= -TW && mx + hw >= TW)) && (ky <= 1.0f || (my - hh <= -TH && my + hh >= TH)))
+            full = false;
         static const bool trace = std::getenv("NX_UW_LAYOUT_TRACE") != nullptr;
         static std::set<uint64_t> traced;
         if (trace && !full && w >= 1000.0f && traced.insert(pane).second) {

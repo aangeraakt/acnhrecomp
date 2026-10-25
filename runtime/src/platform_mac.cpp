@@ -265,7 +265,11 @@ void* create_window() {
             log_line(SDL_GetError());
             return;
         }
-        if (!headless()) SDL_RaiseWindow(g_window);  // without an app bundle it does not come to the front
+        if (!headless()) {
+            SDL_RaiseWindow(g_window);  // without an app bundle it does not come to the front
+            // The saved choice (video.fullscreen): the window opened in a window though the settings said full screen.
+            if (setting("fullscreen") == "1") SDL_SetWindowFullscreen(g_window, true);
+        }
         g_view = SDL_Metal_CreateView(g_window);
         g_layer = SDL_Metal_GetLayer(g_view);
         int pw = 0, ph = 0;
@@ -703,6 +707,14 @@ int main() {
             case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
                 g_pixel_w = uint32_t(e.window.data1), g_pixel_h = uint32_t(e.window.data2);
                 break;
+            case SDL_EVENT_WINDOW_ENTER_FULLSCREEN:
+            case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN: {
+                // However it changed (F11, the green button, the settings screen), the setting follows the window,
+                // so the settings screen shows it and the next start opens the same way.
+                const char* now = e.type == SDL_EVENT_WINDOW_ENTER_FULLSCREEN ? "1" : "0";
+                if (nx::config_get("video.fullscreen", "0") != now) nx::config_set("video.fullscreen", now), nx::config_save();
+                break;
+            }
             case SDL_EVENT_KEY_DOWN:
                 if (e.key.scancode == SDL_SCANCODE_F11 && g_window)
                     SDL_SetWindowFullscreen(g_window, !(SDL_GetWindowFlags(g_window) & SDL_WINDOW_FULLSCREEN));

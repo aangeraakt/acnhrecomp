@@ -336,7 +336,7 @@ struct PipeBuild {
     VkPipelineShaderStageCreateInfo stages[2]{};
     VkSpecializationInfo spec_info{};
     float uw_values[2] = {1.0f, 1.0f};  // the screen scale's constants 0 and 1 (vertex stage)
-    float fc_values[2] = {1.0f, 1.0f};  // gl_FragCoord's scale, constants 2 and 3 (fragment stage)
+    float fc_values[4] = {1.0f, 1.0f, 0.0f, 0.0f};  // gl_FragCoord's scale and offset, constants 2..5 (fragment)
     VkSpecializationInfo fc_spec{};
     uint32_t nstages = 0;
     std::vector<VkVertexInputAttributeDescription> attrs;
@@ -821,6 +821,7 @@ PipelineKey canonical_key(const PipelineKey& in) {
     k.alpha_to_coverage = in.alpha_to_coverage ? 1 : 0;
     k.uw_x = in.uw_x;
     k.fc_x = in.fc_x;
+    k.fc_off = in.fc_off;
     return k;
 }
 
@@ -866,9 +867,11 @@ std::unique_ptr<PipeBuild> prepare_graphics_pipeline(const PipelineKey& key, con
             st.pSpecializationInfo = &spec_info;
         }
         if (scaled && s == key.fs) {  // gl_FragCoord in 16:9 units: constants 2 and 3 (nvn_spirv_fragcoord.cpp)
-            static const VkSpecializationMapEntry entries[2] = {{2, 0, sizeof(float)}, {3, sizeof(float), sizeof(float)}};
+            static const VkSpecializationMapEntry entries[4] = {
+                {2, 0, sizeof(float)}, {3, 4, sizeof(float)}, {4, 8, sizeof(float)}, {5, 12, sizeof(float)}};
             B.fc_values[0] = key.fc_x > 0 ? key.fc_x : 1.0f, B.fc_values[1] = key.fc_x < 0 ? -key.fc_x : 1.0f;
-            B.fc_spec = {2, entries, 2 * sizeof(float), B.fc_values};
+            B.fc_values[2] = key.fc_x > 0 ? key.fc_off : 0.0f, B.fc_values[3] = key.fc_x < 0 ? key.fc_off : 0.0f;
+            B.fc_spec = {4, entries, 4 * sizeof(float), B.fc_values};
             st.pSpecializationInfo = &B.fc_spec;
         }
     }

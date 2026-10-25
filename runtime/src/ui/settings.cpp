@@ -35,6 +35,11 @@
 #include "ui/theme.h"
 #include "ui/ui_internal.h"
 
+namespace nx::nvn {
+float uw_factor();      // nvn_ultrawide.cpp: the picture's aspect over 16:9
+float uw_resolution();  // and its rows over the game's
+}  // namespace nx::nvn
+
 namespace nx::ui {
 
 namespace {
@@ -322,43 +327,77 @@ bool lsfg_available() {
     return false;
 }
 
+// A heading over a group of rows.
+void section(const char* key) {
+    ImGui::Dummy(ImVec2(0, 8 * g_scale));
+    ImGui::SetWindowFontScale(1.18f);
+    ImGui::TextColored(ImVec4(0.24f, 0.55f, 0.36f, 1), "%s", tr(key));
+    ImGui::SetWindowFontScale(1.0f);
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(p.x, p.y + 2 * g_scale),
+                                              ImVec2(p.x + ImGui::GetContentRegionAvail().x, p.y + 5 * g_scale),
+                                              ImGui::GetColorU32(ImVec4(0.49f, 0.76f, 0.42f, 1)), 2 * g_scale);
+    ImGui::Dummy(ImVec2(0, 12 * g_scale));
+}
+
 void page_video() {
-    row("video.preset", "video.preset.desc", [&](float w) {
-        combo("video.preset", "custom",
-              {{"custom", tr("video.preset.custom")}, {"quality", tr("video.preset.quality")},
-               {"balanced", tr("video.preset.balanced")}, {"low", tr("video.preset.low")}},
-              w);
-    });
+    section("video.section.screen");
     row("video.display", nullptr, [&](float w) {
         combo("video.fullscreen", "0", {{"0", tr("video.display.windowed")}, {"1", tr("video.display.fullscreen")}}, w);
     });
-    row("video.window_size", nullptr, [&](float w) {
-        combo("video.window", "auto",
-              {{"auto", tr("common.auto")}, {"1280x720", "1280 × 720"}, {"1600x900", "1600 × 900"},
-               {"1920x1080", "1920 × 1080"}, {"2560x1440", "2560 × 1440"}, {"3840x2160", "3840 × 2160"}},
+    if (config_get("video.fullscreen", "0") != "1")
+        row("video.window_size", nullptr, [&](float w) {
+            combo("video.window", "auto",
+                  {{"auto", tr("common.auto")}, {"1280x720", "1280 × 720"}, {"1600x900", "1600 × 900"},
+                   {"1920x1080", "1920 × 1080"}, {"2560x1440", "2560 × 1440"}, {"3840x2160", "3840 × 2160"}},
+                  w);
+        });
+    row("video.vsync", "video.vsync.desc", [&](float w) { toggle("video.vsync", true, w); });
+    row("video.show_fps", "video.show_fps.desc", [&](float w) { toggle("video.show_fps", config_show_fps(), w); });
+
+    section("video.section.picture");
+    // The screen's own first: the picture drawn at the window's rows and in its shape.
+    Choices resolutions = {{"window", tr("video.resolution.window")}, {"native", tr("video.resolution.native")}};
+#if defined(__ANDROID__)
+    resolutions.insert(resolutions.begin(), {"auto", tr("video.resolution.auto")});
+#endif
+    for (const char* r : {"540", "720", "900", "1080", "1440"}) resolutions.push_back({r, std::string(r) + "p"});
+    resolutions.push_back({"2160", "2160p (4K)"});
+    row("video.resolution", "video.resolution.desc", [&](float w) {
+        combo("video.resolution", plat::kDefaultResolution, resolutions, w);
+    });
+    row("video.aspect", "video.aspect.desc", [&](float w) {
+        combo("video.aspect", "16:9",
+              {{"auto", tr("video.aspect.screen")}, {"16:9", tr("video.aspect.original")}, {"16:10", "16:10"},
+               {"4:3", "4:3"}, {"21:9", "21:9"}, {"32:9", "32:9"}, {"20:9", trf("video.aspect.phone", "20:9")},
+               {"19.5:9", trf("video.aspect.phone", "19.5:9")}},
               w);
     });
-    row("video.show_fps", "video.show_fps.desc", [&](float w) { toggle("video.show_fps", config_show_fps(), w); });
-    row("video.vsync", "video.vsync.desc", [&](float w) { toggle("video.vsync", true, w); });
+    {   // What the two above give now: the 3D picture's rows and shape.
+        const float s = nvn::uw_resolution(), k = nvn::uw_factor();
+        const int rows = int(std::lround(s * (config_is_handheld() ? 720.0f : 1080.0f) * std::max(1.0f, 1.0f / k)));
+        char now[160];
+        std::snprintf(now, sizeof now, tr("video.picture.now"), int(std::lround(rows * 16.0f / 9.0f * k)), rows,
+                      double(16.0f / 9.0f * k));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.35f, 0.55f, 0.35f, 1));
+        ImGui::TextWrapped("%s", now);
+        ImGui::PopStyleColor();
+        ImGui::Dummy(ImVec2(0, 4 * g_scale));
+    }
     row("video.mode", nullptr, [&](float w) {
         combo("video.mode", "docked", {{"docked", tr("video.render.docked")}, {"handheld", tr("video.render.handheld")}}, w);
-    });
-    row("video.resolution", "video.resolution.desc", [&](float w) {
-        combo("video.resolution", plat::kDefaultResolution,
-              {{"auto", tr("common.auto")}, {"native", tr("video.resolution.native")}, {"540", "540p"}, {"720", "720p"}, {"900", "900p"},
-               {"1080", "1080p"}, {"1440", "1440p"}, {"2160", "2160p (4K)"}, {"window", tr("video.resolution.window")}},
-              w);
     });
     row("video.upscaler", nullptr, [&](float w) {
         combo("video.upscaler", plat::kDefaultUpscaler, {{"linear", tr("video.upscaler.linear")}, {"fsr", tr("video.upscaler.fsr")}}, w);
     });
     if (config_get("video.upscaler", plat::kDefaultUpscaler) == "fsr")
         row("video.sharpness", nullptr, [&](float w) { slider("video.fsr_sharpness_pct", 0, 100, 80, "%d%%", w); });
-    row("video.aspect", "video.aspect.desc", [&](float w) {
-        combo("video.aspect", "16:9",
-              {{"16:9", tr("video.aspect.original")}, {"auto", tr("common.auto")}, {"16:10", "16:10"}, {"4:3", "4:3"},
-               {"21:9", "21:9"}, {"32:9", "32:9"}, {"20:9", trf("video.aspect.phone", "20:9")},
-               {"19.5:9", trf("video.aspect.phone", "19.5:9")}},
+
+    section("video.section.performance");
+    row("video.preset", "video.preset.desc", [&](float w) {
+        combo("video.preset", "custom",
+              {{"custom", tr("video.preset.custom")}, {"quality", tr("video.preset.quality")},
+               {"balanced", tr("video.preset.balanced")}, {"low", tr("video.preset.low")}},
               w);
     });
     row("video.framerate", "video.framerate.desc", [&](float w) {
@@ -890,6 +929,9 @@ bool settings_draw(float scale, ImFont* title) {
         case 4: page_saves(); break;
         default: page_about(); break;
     }
+    // Tests: NX_UI_SCROLL=<0..1> scrolls the page that far down (headless dumps show the rows further down).
+    if (static const char* sc = std::getenv("NX_UI_SCROLL"); sc && ImGui::GetScrollMaxY() > 0)
+        ImGui::SetScrollY(float(std::atof(sc)) * ImGui::GetScrollMaxY());
     ImGui::EndChild();
     // Footer: restart note or toast, controller prompt bar, and quit.
     {

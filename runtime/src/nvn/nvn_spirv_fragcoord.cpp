@@ -3,7 +3,8 @@
 // 16:9, and the game's passes that make a screen coordinate as gl_FragCoord.x * (1 / 1920) sampled past the edge from
 // 1/k of the width on: the right quarter of the island smeared into horizontal bands at 21:9 (docs/STATUS.md). The
 // fragment module's reads of gl_FragCoord.x and .y are multiplied by specialization constants 2 and 3 (1 / k on the
-// wider axis, set per pipeline; 1 elsewhere).
+// wider axis, set per pipeline; 1 elsewhere) and added constants 4 and 5 (pixels: a squeezed UI draw, laid out over the
+// 16:9 middle of the target, sees its coordinates from the middle's left edge).
 #include <map>
 
 #include "nvn_pipeline.h"
@@ -15,7 +16,7 @@ namespace {
 enum : uint32_t {
     OpTypeFloat = 22, OpTypeVector = 23, OpConstant = 43, OpSpecConstant = 50, OpSpecConstantComposite = 51,
     OpFunction = 54, OpVariable = 59, OpLoad = 61, OpAccessChain = 65, OpInBoundsAccessChain = 66, OpDecorate = 71,
-    OpFMul = 133, DecorationBuiltIn = 11, DecorationSpecId = 1, BuiltInFragCoord = 15,
+    OpFAdd = 129, OpFMul = 133, DecorationBuiltIn = 11, DecorationSpecId = 1, BuiltInFragCoord = 15,
 };
 
 bool header_op(uint32_t op) {  // capabilities .. annotations: before the types
@@ -61,16 +62,20 @@ bool patch_fragcoord_scale(const std::vector<uint32_t>& in, std::vector<uint32_t
         }
     }
     if (!var || !f32 || first_function == in.size()) return false;
-    const uint32_t sx = bound++, sy = bound++;
+    const uint32_t sx = bound++, sy = bound++, ox = bound++, oy = bound++;
     std::vector<uint32_t> types;  // after the existing types (f32 is among them)
     types.insert(types.end(), {(4u << 16) | OpSpecConstant, f32, sx, 0x3f800000u});
     types.insert(types.end(), {(4u << 16) | OpSpecConstant, f32, sy, 0x3f800000u});
-    uint32_t sv = 0;
+    types.insert(types.end(), {(4u << 16) | OpSpecConstant, f32, ox, 0u});
+    types.insert(types.end(), {(4u << 16) | OpSpecConstant, f32, oy, 0u});
+    uint32_t sv = 0, ov = 0, zero = 0;
     auto vec_scale = [&]() {
         if (!sv && v4f) {
             if (!one) one = bound++, types.insert(types.end(), {(4u << 16) | OpConstant, f32, one, 0x3f800000u});
-            sv = bound++;
+            zero = bound++, types.insert(types.end(), {(4u << 16) | OpConstant, f32, zero, 0u});
+            sv = bound++, ov = bound++;
             types.insert(types.end(), {(7u << 16) | OpSpecConstantComposite, v4f, sv, sx, sy, one, one});
+            types.insert(types.end(), {(7u << 16) | OpSpecConstantComposite, v4f, ov, ox, oy, zero, zero});
         }
         return sv;
     };
@@ -84,11 +89,13 @@ bool patch_fragcoord_scale(const std::vector<uint32_t>& in, std::vector<uint32_t
             uint32_t scale = c != component.end() && w[1] == f32 ? (c->second == 0 ? sx : sy)
                              : w[3] == var && w[1] == v4f   ? vec_scale()
                                                             : 0;
+            uint32_t offset = scale == sx ? ox : scale == sy ? oy : ov;
             if (scale) {
-                uint32_t raw = bound++;
+                uint32_t raw = bound++, scaled = bound++;
                 body.insert(body.end(), w, w + n.len);
                 body[body.size() - n.len + 2] = raw;
-                body.insert(body.end(), {(5u << 16) | OpFMul, w[1], w[2], raw, scale});
+                body.insert(body.end(), {(5u << 16) | OpFMul, w[1], scaled, raw, scale});
+                body.insert(body.end(), {(5u << 16) | OpFAdd, w[1], w[2], scaled, offset});
                 patched++;
                 continue;
             }
@@ -100,6 +107,8 @@ bool patch_fragcoord_scale(const std::vector<uint32_t>& in, std::vector<uint32_t
     out.assign(in.begin(), in.begin() + first_type);
     out.insert(out.end(), {(4u << 16) | OpDecorate, sx, DecorationSpecId, 2});
     out.insert(out.end(), {(4u << 16) | OpDecorate, sy, DecorationSpecId, 3});
+    out.insert(out.end(), {(4u << 16) | OpDecorate, ox, DecorationSpecId, 4});
+    out.insert(out.end(), {(4u << 16) | OpDecorate, oy, DecorationSpecId, 5});
     out.insert(out.end(), in.begin() + first_type, in.begin() + first_function);
     out.insert(out.end(), types.begin(), types.end());
     out.insert(out.end(), body.begin(), body.end());

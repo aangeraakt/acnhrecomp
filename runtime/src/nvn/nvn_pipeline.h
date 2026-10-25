@@ -81,6 +81,7 @@ struct PipelineKey {
     // gl_FragCoord in 16:9 units on a widened target (nvn_spirv_fragcoord.cpp): .x * fc_x when positive, .y * -fc_x
     // when negative (0: none, the unpatched module).
     float fc_x = 0;
+    float fc_off = 0;  // and gl_FragCoord + fc_off on the same axis (pixels; the squeezed UI)
 };
 VkPipeline graphics_pipeline(const PipelineKey& key, const ProgramLayout& layout);
 // Under NX_ASYNC_PIPELINES, whether the next graphics_pipeline may skip its draw while the pipeline compiles: only a

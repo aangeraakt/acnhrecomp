@@ -21,7 +21,7 @@ while IFS= read -r f; do
     docs/screenshots/*.png|docs/screenshots/*.jpg) continue ;;
     android/res/mipmap-*/*.png|android/icon_512.png) continue ;;  # the launcher icon, drawn by tools/make_android_icon.py
   esac
-  if [ "$(head -c 8000 "$f" | tr -d '\000' | wc -c)" -ne "$(head -c 8000 "$f" | wc -c)" ]; then
+  if [ "$(head -c 8000 "$f" | LC_ALL=C tr -d '\000' | wc -c)" -ne "$(head -c 8000 "$f" | wc -c)" ]; then
     echo "BLOCKED (binary content): $f"; bad=1; continue
   fi
   if grep -qE '^void (main|sdk|subsdk[0-9])_[0-9A-F]{8}\(nx::CPU' "$f"; then
