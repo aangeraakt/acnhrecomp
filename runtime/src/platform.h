@@ -121,6 +121,7 @@ void input_script(PadState& p);  // NX_INPUT_SCRIPT presses (input_script.cpp), 
 
 // ---- for the settings screen (ui/settings.cpp) ----
 void set_fullscreen(bool on);                  // live
+int display_refresh_hz();                      // the display the window is on (60 when unknown)
 void set_master_volume(float v);               // 0..1, live (scales the device output)
 std::string controller_name();                 // the connected controller ("" = none)
 std::string controller_kind();                 // "switch", "xbox", "playstation", "generic" or "" (none)

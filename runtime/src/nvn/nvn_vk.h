@@ -98,6 +98,7 @@ VkPipelineCache pipeline_cache();
 void pipeline_cache_save();
 void note_pipeline_created(uint64_t ns, bool worker);  // worker: compiled off the replay thread
 void note_pipeline_alias();               // a new raw key that maps to a pipeline already built (canonical_key)
+void note_texture_uploaded(uint64_t ns, uint64_t bytes);  // a texture copied from guest memory (the hitch lines)
 void note_module_created(uint64_t ns);    // a shader module built (SPIR-V patches + vkCreateShaderModule)
 void note_pipeline_waited(uint64_t ns);   // the replay waited this long for a compile in flight
 void note_pipeline_skipped();             // a draw skipped because its pipeline compiles (NX_ASYNC_PIPELINES)

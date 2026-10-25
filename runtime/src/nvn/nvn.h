@@ -406,7 +406,8 @@ void worker_wait(uint64_t serial);
 uint64_t worker_last();
 void worker_finish();
 // guest NVNtexture* of a window texture; crop: the part shown (x, y, w, h; w 0: all), scaled to the window.
-void gpu_present(uint64_t texture, const int32_t* crop = nullptr);
+void gpu_present(uint64_t texture, const int32_t* crop = nullptr, int interval = 0);
+bool present_vsync_paced();  // nvn_vk.cpp: frames paced by the display's vsync (pace_present then does nothing)
 // With NX_ASYNC_GPU submits run while the game goes on (nvn_frames.cpp): the serial of the last one, and a wait until
 // it completed with its results in guest memory (true if it had to wait). Synchronous: 0, and nothing to wait for.
 uint64_t gpu_serial();

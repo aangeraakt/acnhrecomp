@@ -91,6 +91,7 @@ std::mutex g_pad_lock;
 PadState g_pad;
 
 }  // namespace
+void update_refresh_hz();  // below, with display_refresh_hz
 
 // ---- memory ---------------------------------------------------------------------------------------------------
 
@@ -247,6 +248,7 @@ void* create_window() {
         int pw = 0, ph = 0;
         SDL_GetWindowSizeInPixels(g_window, &pw, &ph);
         g_pixel_w = uint32_t(pw), g_pixel_h = uint32_t(ph);
+        update_refresh_hz();
     });
     return g_window;  // the Vulkan surface is made from it (on the main thread, vulkan_create_surface)
 }
@@ -383,6 +385,16 @@ static void sample_input() {
 // ---- settings screen hooks (platform.h) --------------------------------------------------------------------------
 
 std::atomic<float> g_volume{-1.0f};  // master volume 0..1 (-1: not read from config.ini yet; audio_cb applies it)
+
+// The refresh rate of the window's display, read on the main thread when the window is made and when it moves to
+// another display (nvn_vk.cpp presents each game frame for that many vsyncs).
+std::atomic<int> g_refresh_hz{60};
+void update_refresh_hz() {
+    if (!g_window) return;
+    if (const SDL_DisplayMode* m = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(g_window)); m && m->refresh_rate > 20)
+        g_refresh_hz = int(m->refresh_rate + 0.5f);
+}
+int display_refresh_hz() { return g_refresh_hz.load(); }
 
 void set_fullscreen(bool on) {
     run_on_main([on] {
@@ -705,6 +717,10 @@ int main() {
                 break;
             case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
                 g_pixel_w = uint32_t(e.window.data1), g_pixel_h = uint32_t(e.window.data2);
+                break;
+            case SDL_EVENT_WINDOW_DISPLAY_CHANGED:
+            case SDL_EVENT_DISPLAY_CURRENT_MODE_CHANGED:
+                update_refresh_hz();
                 break;
             case SDL_EVENT_KEY_DOWN:
                 if ((e.key.scancode == SDL_SCANCODE_F11 ||

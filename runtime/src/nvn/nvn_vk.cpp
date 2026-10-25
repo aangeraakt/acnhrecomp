@@ -57,6 +57,8 @@ VkFormat g_sc_format = VK_FORMAT_B8G8R8A8_UNORM;
 VkSemaphore g_acquired = VK_NULL_HANDLE, g_rendered = VK_NULL_HANDLE;
 VkBool32 g_depth_clip_control = VK_FALSE;
 bool g_dynamic_rendering = true;  // vkCmdBeginRendering usable (core 1.3 or VK_KHR_dynamic_rendering)
+std::atomic<bool> g_fifo{false};    // the swapchain presents in FIFO (VSync): present_vsync_paced
+bool g_display_timing = false;      // VK_GOOGLE_display_timing enabled
 bool g_integrated = false;
 bool g_require_sg32 = false;  // compute pipelines are made with a required subgroup size of 32 (Maxwell's warp)  // the chosen GPU is an integrated one (unified memory, the GPU is the long side)
 VkPhysicalDeviceFeatures g_features{};  // the core features enabled (vk_features())
@@ -262,6 +264,10 @@ bool init() {
         dexts.push_back("VK_EXT_index_type_uint8");
         *tail = &fu8, tail = &fu8.pNext;
     }
+    if (has_extension(dext, "VK_GOOGLE_display_timing")) {  // when frames reach the screen (display_timing_log)
+        dexts.push_back("VK_GOOGLE_display_timing");
+        g_display_timing = true;
+    }
     if (has_extension(dext, "VK_EXT_depth_clip_control")) {
         dexts.push_back("VK_EXT_depth_clip_control");
         *tail = &fclip, tail = &fclip.pNext;
@@ -458,6 +464,7 @@ bool make_swapchain() {
         else if (has(VK_PRESENT_MODE_IMMEDIATE_KHR))
             ci.presentMode = VK_PRESENT_MODE_IMMEDIATE_KHR;
     }
+    g_fifo = ci.presentMode == VK_PRESENT_MODE_FIFO_KHR;
     static const char* const mode_names[] = {"IMMEDIATE", "MAILBOX", "FIFO", "FIFO_RELAXED"};
     log("nvn/vk: present mode %s (%u modes offered)", ci.presentMode <= 3 ? mode_names[ci.presentMode] : "?", modes_n);
     ci.clipped = VK_TRUE;
@@ -778,6 +785,50 @@ void present_headless(uint64_t texture) {
 
 namespace {
 
+// VK_GOOGLE_display_timing: each present gets an id; which ids were the game's own frames (not the vsync repeats) is
+// kept, and every 300 frames the times the frames actually reached the screen are read back and logged as how many
+// refreshes each frame stayed (at 30 fps on a 60 Hz display: 2 each, when it is smooth).
+uint32_t g_present_id = 0;
+std::vector<uint8_t> g_present_real(4096);
+uint64_t g_last_real_shown = 0, g_refresh_ns = 0;
+uint64_t g_shown_for[6] = {};  // 1, 2, 3, 4, 5, 6+ refreshes
+
+uint32_t display_timing_next(bool real) {
+    uint32_t id = ++g_present_id;
+    g_present_real[id % g_present_real.size()] = real;
+    return id;
+}
+
+void display_timing_log() {
+    static uint64_t frames = 0;
+    if (++frames % 30) return;
+    if (!g_refresh_ns) {
+        VkRefreshCycleDurationGOOGLE rc{};
+        if (p_vkGetRefreshCycleDurationGOOGLE(g_device, g_swapchain, &rc) == VK_SUCCESS) g_refresh_ns = rc.refreshDuration;
+        if (!g_refresh_ns) g_refresh_ns = 16'666'667;
+    }
+    uint32_t n = 0;
+    if (p_vkGetPastPresentationTimingGOOGLE(g_device, g_swapchain, &n, nullptr) != VK_SUCCESS || !n) return;
+    std::vector<VkPastPresentationTimingGOOGLE> t(n);
+    if (p_vkGetPastPresentationTimingGOOGLE(g_device, g_swapchain, &n, t.data()) != VK_SUCCESS) return;
+    for (uint32_t k = 0; k < n; k++) {
+        if (!g_present_real[t[k].presentID % g_present_real.size()] || !t[k].actualPresentTime) continue;
+        if (g_last_real_shown && t[k].actualPresentTime > g_last_real_shown) {
+            double refreshes = double(t[k].actualPresentTime - g_last_real_shown) / double(g_refresh_ns);
+            int r = int(refreshes + 0.5);
+            g_shown_for[std::clamp(r, 1, 6) - 1]++;
+        }
+        g_last_real_shown = t[k].actualPresentTime;
+    }
+    if (frames % 300 == 0) {
+        log("display: game frames shown for 1/2/3/4/5/6+ refreshes (%.2f ms): %llu %llu %llu %llu %llu %llu",
+            double(g_refresh_ns) / 1e6, (unsigned long long)g_shown_for[0], (unsigned long long)g_shown_for[1],
+            (unsigned long long)g_shown_for[2], (unsigned long long)g_shown_for[3], (unsigned long long)g_shown_for[4],
+            (unsigned long long)g_shown_for[5]);
+        for (auto& c : g_shown_for) c = 0;
+    }
+}
+
 // One image to the swapchain: acquired, `record(cb, real)` (recorded first; returns the image to show, and whether it
 // is one of the game's frames: those are counted and dumped), the present pass or the blit of it, the settings screen,
 // the submit and the present.
@@ -859,8 +910,12 @@ void present_image(const int32_t* crop, Record&& record) {
     pi.swapchainCount = 1;
     pi.pSwapchains = &g_swapchain;
     pi.pImageIndices = &index;
+    VkPresentTimeGOOGLE when{uint32_t(display_timing_next(real)), 0};
+    VkPresentTimesInfoGOOGLE times{VK_STRUCTURE_TYPE_PRESENT_TIMES_INFO_GOOGLE};
+    if (g_display_timing) times.swapchainCount = 1, times.pTimes = &when, pi.pNext = &times;
     r = p_vkQueuePresentKHR(g_queue, &pi);
-    plat::frame_presented();  // cores, CPU time, present intervals (frame_stats.cpp)
+    if (g_display_timing && real) display_timing_log();
+    if (real) plat::frame_presented();  // cores, CPU time, present intervals (frame_stats.cpp)
     // SUBOPTIMAL re-makes the swapchain only when the surface size changed: Android returns it for every present when
     // the swapchain's transform is not the display's (a Galaxy S23 did for Hades), a rebuild per frame.
     bool remake = r == VK_ERROR_OUT_OF_DATE_KHR;
@@ -877,7 +932,17 @@ void present_image(const int32_t* crop, Record&& record) {
 
 uint64_t g_replay_presents = 0;
 
-void gpu_present(uint64_t texture, const int32_t* crop) {
+// Frame pacing on the display's own vsync (with VSync, FIFO): each of the game's frames is presented for as many
+// refreshes as its present interval asks (interval x refresh / 60: twice at 30 fps on a 60 Hz display), and the FIFO
+// queue holds the replay, and through the two present slots the game, to that rhythm. Paced by a timer instead
+// (pace_present), frames became ready at times that wandered against the display's refresh: some were shown for three
+// refreshes and the next for one (50 ms then 17 ms), a judder at a steady 30 fps. NX_VSYNC_PACING=0: the timer.
+bool present_vsync_paced() {
+    static const bool off = std::getenv("NX_VSYNC_PACING") && std::getenv("NX_VSYNC_PACING")[0] == '0';
+    return !off && g_fifo.load() && !framegen_wanted() && !plat::headless();
+}
+
+void gpu_present(uint64_t texture, const int32_t* crop, int interval) {
     plat::perf_hint_thread();  // the thread that presents takes part in the frame (perf_hint.cpp)
     std::unique_lock lk(g_gpu);
     g_replay_presents++;
@@ -928,6 +993,14 @@ void gpu_present(uint64_t texture, const int32_t* crop) {
         return;
     }
     present_image(crop, [&](VkCommandBuffer, bool&) { return src; });
+    if (present_vsync_paced() && interval > 0) {
+        const int repeats = std::max(1, int(std::lround(double(interval) * plat::display_refresh_hz() / 60.0))) - 1;
+        for (int k = 0; k < repeats && g_swapchain && !plat::window_minimized(); k++)
+            present_image(crop, [&](VkCommandBuffer, bool& real) {
+                real = false;
+                return src;
+            });
+    }
 }
 
 }  // namespace nx::nvn

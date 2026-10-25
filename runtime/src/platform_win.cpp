@@ -361,6 +361,7 @@ int vulkan_create_surface(void* instance, void* native_window, uint64_t* surface
 
 // ---- settings screen hooks (platform.h): the screen is not built for this platform yet (ui_stub.cpp) ----
 void set_fullscreen(bool) {}
+int display_refresh_hz() { return 60; }
 void set_master_volume(float) {}
 std::string controller_name() { return ""; }
 std::string controller_kind() { return ""; }

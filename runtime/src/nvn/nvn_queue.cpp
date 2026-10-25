@@ -30,6 +30,8 @@
 namespace nx {
 void svc_profile_mark(int role);
 void svc_profile_report(uint64_t frames, int role);
+bool frame_profile_on();
+void svc_frame_take(uint64_t& total, uint64_t& top_ns, uint32_t& top_imm, uint64_t& top_pc);
 uint64_t display_period_ns();
 extern std::atomic<uint64_t> g_tick_calls, g_yield_calls, g_sleep_calls;
 }
@@ -569,7 +571,7 @@ void pace_present(int interval) {
     static const bool off = std::getenv("NX_NO_FRAME_LIMIT") != nullptr;
     static const uint64_t fast_until = std::getenv("NX_FAST_UNTIL") ? std::strtoull(std::getenv("NX_FAST_UNTIL"), nullptr, 10) : 0;
     static uint64_t next = 0;
-    if (off || interval <= 0) return;
+    if (off || interval <= 0 || present_vsync_paced()) return;
     if (g_frame < fast_until) interval = 1;
     uint64_t now = plat::monotonic_ns();
     if (next > now) plat::sleep_ns(next - now), now = plat::monotonic_ns();
@@ -585,6 +587,8 @@ void QueuePresentTexture(CPU& c) {
     // The frame's work, from the end of the last present's pacing to now (perf_hint.cpp: ADPF on Android).
     static uint64_t work_from = 0;
     uint64_t t_in = plat::monotonic_ns();
+    static uint64_t last_in = 0, prev_in_present = 0;
+    uint64_t t_queue = 0, t_paced = 0;
     tl("present>");
     {
         static thread_local bool marked = false;
@@ -598,15 +602,44 @@ void QueuePresentTexture(CPU& c) {
         // At most two presents queued: the game runs at most two frames ahead of the replay.
         static uint64_t queued[2] = {};
         static int next_slot = 0;
+        uint64_t q0 = plat::monotonic_ns();
         worker_wait(queued[next_slot]);
+        t_queue = plat::monotonic_ns() - q0;
         if (int(c.x[2]) >= 0 && size_t(c.x[2]) < w->textures.size()) {
             uint64_t texture = w->textures[size_t(c.x[2])];
             std::array<int32_t, 4> crop{w->crop[0], w->crop[1], w->crop[2], w->crop[3]};
-            queued[next_slot] = worker_run([texture, crop] { gpu_present(texture, crop.data()); });
+            const int interval = w->interval;
+            queued[next_slot] = worker_run([texture, crop, interval] { gpu_present(texture, crop.data(), interval); });
             next_slot ^= 1;
         }
+        uint64_t p0 = plat::monotonic_ns();
         pace_present(w->interval);
+        t_paced = plat::monotonic_ns() - p0;
     }
+    // NX_FRAME_PROFILE=1: every frame of the presenting thread that took over 36 ms, taken apart: the game's work
+    // (from the end of the last present to this one) with the time in svcs and in waits on the replay inside it, then
+    // the wait for a free present slot (the replay two frames behind) and the pacing sleep.
+    if (frame_profile_on()) {
+        uint64_t svc_ns = 0, top_ns = 0, top_pc = 0;
+        uint32_t top_imm = 0;
+        svc_frame_take(svc_ns, top_ns, top_imm, top_pc);
+        uint64_t sync_ns = 0;
+        for (WaitSite& ws : g_wait_sites) sync_ns += ws.frame_ns, ws.frame_ns = 0;
+        const uint64_t now = plat::monotonic_ns(), period = last_in ? t_in - last_in : 0;
+        static uint64_t slow = 0, frames = 0;
+        frames++;
+        static const uint64_t slow_ns = present_vsync_paced() ? 40'000'000 : 36'000'000;
+        if (period > slow_ns && work_from) {
+            slow++;
+            log("frame: %.1f ms: game %.1f ms (svc %.1f, longest svc %#x %.1f ms; replay waits %.1f), slot wait "
+                "%.1f, pacing %.1f, in present %.1f, previous present %.1f; %llu slow of %llu", double(period) / 1e6,
+                double(t_in - work_from) / 1e6, double(svc_ns) / 1e6, top_imm, double(top_ns) / 1e6,
+                double(sync_ns) / 1e6, double(t_queue) / 1e6, double(t_paced) / 1e6, double(now - t_in) / 1e6,
+                double(prev_in_present) / 1e6, (unsigned long long)slow, (unsigned long long)frames);
+        }
+        prev_in_present = now - t_in;
+    }
+    last_in = t_in;
     work_from = plat::monotonic_ns();
     uint64_t n = ++g_presents;
     uw_scan(n);

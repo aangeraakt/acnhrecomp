@@ -91,6 +91,7 @@ void pipeline_cache_save() {
 // What the replay built or waited for since the last present, for the hitch lines (present_hitch_check).
 struct FrameCost {
     std::atomic<uint64_t> pipelines{0}, pipeline_ns{0}, modules{0}, module_ns{0}, waited{0}, waited_ns{0};
+    std::atomic<uint64_t> textures{0}, texture_ns{0}, texture_bytes{0};
 };
 FrameCost g_frame_cost;
 
@@ -100,6 +101,9 @@ void note_pipeline_created(uint64_t ns, bool worker) {
 }
 void note_pipeline_waited(uint64_t ns) { g_waited++, g_waited_ns += ns, g_frame_cost.waited++, g_frame_cost.waited_ns += ns; }
 void note_pipeline_skipped() { g_skipped++; }
+void note_texture_uploaded(uint64_t ns, uint64_t bytes) {
+    g_frame_cost.textures++, g_frame_cost.texture_ns += ns, g_frame_cost.texture_bytes += bytes;
+}
 void note_pipeline_prewarmed() { g_prewarmed++; }
 
 // ---- the keys of earlier sessions (<cache path minus .bin>.keys) ---------------------------------------------------
@@ -177,13 +181,16 @@ void present_hitch_check(uint64_t replay_ns, uint64_t upload_bytes) {
     if (ms >= limit && lines < 300) {
         lines++;
         log("hitch: present %llu, %.1f ms after the previous; replay and submit %.1f ms, upload %.1f MB; built %llu "
-            "pipelines (%.1f ms), %llu shader modules (%.1f ms); waited for %llu compiles in flight (%.1f ms)",
+            "pipelines (%.1f ms), %llu shader modules (%.1f ms); waited for %llu compiles in flight (%.1f ms); "
+            "%llu textures uploaded (%.1f MB, %.1f ms)",
             (unsigned long long)presents, ms, double(replay_ns) / 1e6, double(upload_bytes) / 1e6,
             (unsigned long long)f.pipelines.load(), double(f.pipeline_ns.load()) / 1e6,
             (unsigned long long)f.modules.load(), double(f.module_ns.load()) / 1e6, (unsigned long long)f.waited.load(),
-            double(f.waited_ns.load()) / 1e6);
+            double(f.waited_ns.load()) / 1e6, (unsigned long long)f.textures.load(),
+            double(f.texture_bytes.load()) / 1e6, double(f.texture_ns.load()) / 1e6);
     }
     f.pipelines = 0, f.pipeline_ns = 0, f.modules = 0, f.module_ns = 0, f.waited = 0, f.waited_ns = 0;
+    f.textures = 0, f.texture_ns = 0, f.texture_bytes = 0;
 }
 void note_astc_decoded(uint64_t ns) { g_astc++, g_astc_ns += ns; }
 

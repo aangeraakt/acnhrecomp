@@ -1152,7 +1152,11 @@ GpuImage* ensure_contents(VkCommandBuffer cb, uint64_t texture) {
         upload = false;
     }
     // A texture already on the GPU that the CPU wrote part of: only those bytes go again (the glyph cache).
-    if (upload) upload_texture(cb, *t, *img, img->uploaded && dirty ? dirty_lo : 0, img->uploaded && dirty ? dirty_hi : UINT64_MAX);
+    if (upload) {
+        const uint64_t u0 = plat::monotonic_ns();
+        upload_texture(cb, *t, *img, img->uploaded && dirty ? dirty_lo : 0, img->uploaded && dirty ? dirty_hi : UINT64_MAX);
+        note_texture_uploaded(plat::monotonic_ns() - u0, t->storage_size);
+    }
     apply_texel_writes(cb, *t, *img);
     if (img->layout == VK_IMAGE_LAYOUT_UNDEFINED) {  // never written: black, not garbage
         transition(cb, *img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);

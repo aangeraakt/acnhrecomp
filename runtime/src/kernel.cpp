@@ -771,11 +771,29 @@ void svc_profile_report(uint64_t frames, int role) {
         it = std::get<0>(it->first) == role ? g_svc_prof.erase(it) : std::next(it);
 }
 
+// NX_FRAME_PROFILE=1: the presenting thread's time in svcs per frame, and its longest one (nvn_queue.cpp takes them).
+bool frame_profile_on() {
+    static const bool on = std::getenv("NX_FRAME_PROFILE") != nullptr;
+    return on;
+}
+std::atomic<uint64_t> g_frame_svc_ns{0}, g_frame_svc_top_ns{0}, g_frame_svc_top_pc{0};
+std::atomic<uint32_t> g_frame_svc_top_imm{0};
+
+void svc_frame_take(uint64_t& total, uint64_t& top_ns, uint32_t& top_imm, uint64_t& top_pc) {
+    total = g_frame_svc_ns.exchange(0), top_ns = g_frame_svc_top_ns.exchange(0);
+    top_imm = g_frame_svc_top_imm.load(), top_pc = g_frame_svc_top_pc.load();
+}
+
 void svc(CPU& c, uint32_t imm, uint64_t pc) {
-    if (!t_svc_role || !svc_profile_on()) return svc_impl(c, imm, pc);
+    if (!t_svc_role || !(svc_profile_on() || frame_profile_on())) return svc_impl(c, imm, pc);
     uint64_t t0 = plat::monotonic_ns();
     svc_impl(c, imm, pc);
     uint64_t dt = plat::monotonic_ns() - t0;
+    if (frame_profile_on() && t_svc_role == 2) {
+        g_frame_svc_ns += dt;
+        if (dt > g_frame_svc_top_ns) g_frame_svc_top_ns = dt, g_frame_svc_top_imm = imm, g_frame_svc_top_pc = pc;
+        if (!svc_profile_on()) return;
+    }
     if (dt >= 30000) {
         std::lock_guard lk(g_svc_lock);
         auto& e = g_svc_prof[{t_svc_role, imm, pc}];
