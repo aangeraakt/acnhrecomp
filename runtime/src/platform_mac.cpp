@@ -712,6 +712,7 @@ int main() {
                 // However it changed (F11, the green button, the settings screen), the setting follows the window,
                 // so the settings screen shows it and the next start opens the same way.
                 const char* now = e.type == SDL_EVENT_WINDOW_ENTER_FULLSCREEN ? "1" : "0";
+                nx::log("platform: window %s full screen", *now == '1' ? "entered" : "left");
                 if (nx::config_get("video.fullscreen", "0") != now) nx::config_set("video.fullscreen", now), nx::config_save();
                 break;
             }
