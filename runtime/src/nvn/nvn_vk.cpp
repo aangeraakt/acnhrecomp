@@ -86,8 +86,20 @@ PFN_vkCreateDevice p_create_device = nullptr;
 std::mutex g_hang_lock;
 std::vector<std::pair<const ShaderInfo*, const ShaderInfo*>> g_hang_lists[3];
 size_t g_hang_at = 0;
+std::atomic<uint64_t> g_hang_serial{1};  // hang_next_submit's count: empties hang_note's cache
 
 void hang_note(const ShaderInfo* vs, const ShaderInfo* fs) {
+    // Every draw: a direct-mapped cache of the pairs already noted in this submit, before the lock and the list's
+    // linear search (2% of the replay thread at 60 fps). The replay thread is the only caller.
+    struct Seen {
+        const ShaderInfo *vs = nullptr, *fs = nullptr;
+        uint64_t serial = 0;
+    };
+    static Seen seen[512];
+    const uint64_t serial = g_hang_serial.load(std::memory_order_relaxed);
+    Seen& e = seen[((reinterpret_cast<uintptr_t>(vs) >> 4) ^ (reinterpret_cast<uintptr_t>(fs) >> 6)) & 511];
+    if (e.serial == serial && e.vs == vs && e.fs == fs) return;
+    e = {vs, fs, serial};
     std::lock_guard lk(g_hang_lock);
     auto& v = g_hang_lists[g_hang_at];
     for (const auto& p : v)
@@ -98,6 +110,7 @@ void hang_note(const ShaderInfo* vs, const ShaderInfo* fs) {
 void hang_next_submit() {
     std::lock_guard lk(g_hang_lock);
     g_hang_at = (g_hang_at + 1) % 3;
+    g_hang_serial.fetch_add(1, std::memory_order_relaxed);
     g_hang_lists[g_hang_at].clear();
 }
 

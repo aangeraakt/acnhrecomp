@@ -86,6 +86,7 @@ std::atomic<uint64_t> g_submitted{0}, g_completed{0};
 std::atomic<uint64_t> g_barrier{0};  // NX_ASYNC_GPU: the last submit with write-backs, retired before the next replay
 FrameTimes g_times;
 uint32_t g_max_replays = 2;                       // pipelined: submits in flight
+uint64_t g_plan_serial = 0;  // frame_plan_split's count: a list's dispatch total is counted once per plan
 uint32_t g_plan_dispatches = 0, g_seen_dispatches = 0;  // pipelined: the submit's DispatchCompute commands, replayed
 // Pipelined, per log period: submits, split ones, write-backs after the first part's fence / after the whole submit,
 // waits for the oldest submit (two in flight), and how far into the replay the split came.
@@ -272,10 +273,14 @@ uint32_t count_dispatches(const CmdList& list, int depth) {
         }
         l.scanned_size = l.cmds.size();
     }
+    // Once per plan: the game calls the same lists from many places (~4000 draws a frame through a few hundred
+    // lists), and the walk over every call path was 9% of the replay thread at 60 fps.
+    if (l.counted_plan == g_plan_serial) return l.counted_total;
     uint32_t n = l.own_dispatches;
     if (depth < 8)
         for (uint64_t h : l.calls)
             if (auto called = submit_command_list(h)) n += count_dispatches(*called, depth + 1);
+    l.counted_plan = g_plan_serial, l.counted_total = n;
     return n;
 }
 
@@ -400,6 +405,7 @@ size_t frame_plan_split(const std::vector<std::shared_ptr<CmdList>>& lists) {
     // NX_COMPUTE_SEPARATE's write-backs are not counted by written_bind_count(): such a submit is waited for whole.
     if (!pipelined() || off || !g_current || replay::written_separate()) return SIZE_MAX;
     size_t last = SIZE_MAX;
+    g_plan_serial++;
     for (size_t k = 0; k < lists.size(); k++)
         if (uint32_t n = count_dispatches(*lists[k], 0)) g_plan_dispatches += n, last = k;
     return last;

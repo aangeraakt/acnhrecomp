@@ -54,6 +54,7 @@
 
 namespace nx {
 void boot();
+void cpu_profile_register(const char* name);  // cpu_profile.cpp
 }
 
 namespace nx::plat {
@@ -685,6 +686,10 @@ int main() {
     sigaction(SIGILL, &sa, nullptr);
     sigaction(SIGFPE, &sa, nullptr);
 
+    // MoltenVK encodes the Metal commands of a vkQueueSubmit on its own dispatch queue instead of inside the call: the
+    // ~2.4 ms of encoding per frame left the replay thread (57-60 fps against 52-58 running about the island at 60 fps
+    // on an M1 Air). Set before the Vulkan library loads; an MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS in the environment wins.
+    setenv("MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS", "0", 0);
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_AUDIO)) {
         std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return 1;
@@ -697,6 +702,7 @@ int main() {
     nx::plat::start_thread([](void*) { game_thread(); nx::plat::exit_process(0); }, nullptr, 64ull << 20);
 
     using namespace nx::plat;
+    nx::cpu_profile_register("events");  // NX_CPU_PROFILE (cpu_profile.cpp)
     // One Cocoa event pump per turn (SDL_PollEvent pumps on every call: each pump walks AppKit's gesture recognizers,
     // ~0.25 ms on an M1), then the queue drained without pumping; a turn every 4 ms (250 Hz) when idle.
     for (;;) {

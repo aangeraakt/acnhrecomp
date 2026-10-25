@@ -345,6 +345,8 @@ struct CmdList {
     // handles it calls, valid while cmds has scanned_size entries.
     size_t scanned_size = SIZE_MAX;
     uint32_t own_dispatches = 0;
+    uint64_t counted_plan = 0;  // count_dispatches' total with the lists it calls, for frame plan counted_plan
+    uint32_t counted_total = 0;
     std::vector<uint64_t> calls;
 };
 // NX_TRACE_SKINLISTS (nvn_cmd.cpp): follows the lists that bind skinned programs, from recording to replay.

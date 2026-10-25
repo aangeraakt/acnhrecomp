@@ -2,6 +2,8 @@
 """Names the functions of a CPU profile written by the runtime (NX_CPU_PROFILE, runtime/src/cpu_profile.cpp).
 
 usage: tools/cpu_profile.py <cpu_profile_<thread>.txt> [binary] [--top N]
+       tools/cpu_profile.py <cpu_stacks_<thread>.txt> [binary] [--top N]: inclusive times (a function and what it
+       calls), from the stacks the runtime collects by the frame pointer chain
 The file holds "slide <hex> samples <n> interval_us <us>" then "<pc hex> <count>" lines. The binary's symbols
 (local ones too, which dladdr cannot see) come from `nm -n`; a recompiled function's C++ name (__Z13main_03B0EEDC...)
 is shown as main_03B0EEDC, the guest function it is.
@@ -12,6 +14,50 @@ import subprocess
 import sys
 
 
+def load_symbols(binary):
+    out = subprocess.run(["nm", "-n", binary], capture_output=True, text=True).stdout
+    addrs, names = [], []
+    for line in out.splitlines():
+        parts = line.split(maxsplit=2)
+        if len(parts) == 3 and parts[1] in "tT":
+            addrs.append(int(parts[0], 16))
+            names.append(parts[2])
+    return addrs, names
+
+
+def short(name):
+    m = re.search(r"((?:main|sdk|subsdk\d)_[0-9A-F]{8})", name)
+    if m:
+        return m.group(1) + " (game)"
+    d = subprocess.run(["c++filt", "-_", name], capture_output=True, text=True).stdout.strip() or name
+    return re.sub(r"\(.*", "", d)
+
+
+def inclusive(path, binary, top):
+    addrs, names = load_symbols(binary)
+    with open(path) as f:
+        head = f.readline().split()
+        slide = int(head[1], 16)
+        per, total = {}, 0
+        for line in f:
+            parts = line.split()
+            n = int(parts[0])
+            total += n
+            seen = set()
+            for k, a in enumerate(parts[1:]):
+                a = int(a, 16) - slide - (1 if k else 0)  # a return address: the call is the instruction before
+                i = bisect.bisect_right(addrs, a) - 1
+                name = names[i] if i >= 0 and a - addrs[i] < 0x100000 else "(outside the binary)"
+                if name in seen:
+                    continue
+                seen.add(name)
+                per[name] = per.get(name, 0) + n
+    print(f"{path}: {total} samples, inclusive")
+    cache = {}
+    for name, n in sorted(per.items(), key=lambda kv: -kv[1])[:top]:
+        print(f"  {100.0 * n / max(total, 1):5.1f}%  {n:7d}  {cache.setdefault(name, short(name))[:110]}")
+
+
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     top = 40
@@ -20,6 +66,8 @@ def main():
         args = [a for a in args if a != str(top)]
     prof = args[0]
     binary = args[1] if len(args) > 1 else "private/acnh/build/acnh"
+    if "cpu_stacks_" in prof:
+        return inclusive(prof, binary, top)
     with open(prof) as f:
         head = f.readline().split()
         slide = int(head[1], 16)
