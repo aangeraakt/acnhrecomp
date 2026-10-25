@@ -9,6 +9,7 @@
 
 #include <atomic>
 #include <mutex>
+#include <thread>
 #include <unordered_set>
 
 #include "nvn_pipeline.h"
@@ -23,7 +24,7 @@ namespace {
 
 VkPipelineCache g_cache = VK_NULL_HANDLE;
 bool g_tried = false;
-size_t g_saved_size = 0;
+std::atomic<size_t> g_saved_size{0};
 std::string g_path;
 uint64_t g_alias = 0, g_modules = 0, g_module_ns = 0, g_astc = 0, g_astc_ns = 0;
 std::atomic<uint64_t> g_pipelines{0}, g_pipeline_ns{0}, g_worker_pipelines{0}, g_worker_ns{0};  // also counted from the compile worker threads
@@ -63,19 +64,28 @@ VkPipelineCache pipeline_cache() {
     return g_cache;
 }
 
+// On a thread of its own: serializing a cache of some 20 MB (MoltenVK) and writing it took ~80 ms, a stutter every
+// 600 presents when it ran on the replay thread. The cache is internally synchronized; one save at a time.
+std::atomic<bool> g_saving{false};
+
 void pipeline_cache_save() {
-    if (!g_cache) return;
-    size_t n = 0;
-    if (p_vkGetPipelineCacheData(vk_device(), g_cache, &n, nullptr) != VK_SUCCESS || n <= g_saved_size) return;
-    std::vector<uint8_t> data(n);
-    if (p_vkGetPipelineCacheData(vk_device(), g_cache, &n, data.data()) != VK_SUCCESS) return;
-    std::string tmp = g_path + ".tmp";
-    if (FILE* f = plat::fopen_utf8(tmp, "wb")) {
-        bool ok = std::fwrite(data.data(), 1, n, f) == n;
-        ok = std::fclose(f) == 0 && ok;
-        std::remove(g_path.c_str());
-        if (ok && std::rename(tmp.c_str(), g_path.c_str()) == 0) g_saved_size = n;
-    }
+    if (!g_cache || g_saving.exchange(true)) return;
+    std::thread([] {
+        size_t n = 0;
+        if (p_vkGetPipelineCacheData(vk_device(), g_cache, &n, nullptr) == VK_SUCCESS && n > g_saved_size) {
+            std::vector<uint8_t> data(n);
+            if (p_vkGetPipelineCacheData(vk_device(), g_cache, &n, data.data()) == VK_SUCCESS) {
+                std::string tmp = g_path + ".tmp";
+                if (FILE* f = plat::fopen_utf8(tmp, "wb")) {
+                    bool ok = std::fwrite(data.data(), 1, n, f) == n;
+                    ok = std::fclose(f) == 0 && ok;
+                    std::remove(g_path.c_str());
+                    if (ok && std::rename(tmp.c_str(), g_path.c_str()) == 0) g_saved_size = n;
+                }
+            }
+        }
+        g_saving = false;
+    }).detach();
 }
 
 // What the replay built or waited for since the last present, for the hitch lines (present_hitch_check).
