@@ -29,6 +29,7 @@ struct State {
     DepthStencilInfo depth;
     PolygonInfo polygon;
     float blend_color[4] = {};
+    float alpha_ref = 0;  // SetAlphaRef: the alpha test's reference (its function is in `color`)
     int32_t viewport[4] = {}, scissor[4] = {};
     bool rasterizer_discard = false, render_enable = true;  // SetRasterizerDiscard / SetRenderEnable: draws skipped
     bool has_viewport = false, has_scissor = false;

@@ -232,6 +232,12 @@ void SetBlendColor(CPU& c) {
     record(c.x[0], cmd);
 }
 
+void SetAlphaRef(CPU& c) {  // (cmd, float ref [s0])
+    Cmd cmd{Cmd::SetAlphaRef};
+    cmd.f[0] = c.v[0].f32[0];
+    record(c.x[0], cmd);
+}
+
 void SetDepthRange(CPU& c) {  // (cmd, float near [s0], float far [s1])
     Cmd cmd{Cmd::SetDepthRange};
     cmd.f[0] = c.v[0].f32[0], cmd.f[1] = c.v[1].f32[0];
@@ -313,6 +319,7 @@ NX_HLE("nvnCommandBufferBindPolygonState", BindPolygonState);
 NX_HLE("nvnCommandBufferBindMultisampleState", BindMultisampleState);
 NX_HLE("nvnCommandBufferSetBlendColor", SetBlendColor);
 NX_HLE("nvnCommandBufferSetDepthRange", SetDepthRange);
+NX_HLE("nvnCommandBufferSetAlphaRef", SetAlphaRef);
 NX_HLE("nvnCommandBufferDrawArrays", DrawArrays);
 NX_HLE("nvnCommandBufferDrawArraysInstanced", DrawArraysInstanced);
 NX_HLE("nvnCommandBufferDrawElements", DrawElements);

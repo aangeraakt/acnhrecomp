@@ -95,6 +95,7 @@ void draw_command(VkCommandBuffer cb, const Cmd& c, const CmdList& list, const T
             if (auto* p = blob(sizeof(PolygonInfo))) std::memcpy(&s.polygon, p, sizeof s.polygon);
             break;
         case Cmd::BindMultisampleState: s.alpha_to_coverage = c.n != 0; break;
+        case Cmd::SetAlphaRef: s.alpha_ref = c.f[0]; break;
         case Cmd::SetBlendColor: std::memcpy(s.blend_color, c.f, sizeof s.blend_color); break;
         case Cmd::UpdateUniformBuffer: {  // (buffer address, size, offset, data): written in order, like the GPU
             uint64_t off = c.a[2];

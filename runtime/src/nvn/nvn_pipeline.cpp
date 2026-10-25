@@ -91,15 +91,17 @@ VkShaderStageFlags stage_bit(ShaderStage s) {
 // (the SPIR-V patches and vkCreateShaderModule were 1 ms a module on the replay thread: 5-10 ms when a scene showed
 // new shaders, every session, the disk cache keeping pipelines but not modules).
 std::recursive_mutex g_module_lock;
-VkShaderModule module_of(const ShaderInfo* s, const uint8_t* kinds = nullptr, uint32_t unwritten = 0, bool scaled = false) {
+// `alpha_func`, `alpha_ref`: NVN's alpha test in the fragment module (nvn_spirv_alpha.cpp; func 0 none).
+VkShaderModule module_of(const ShaderInfo* s, const uint8_t* kinds = nullptr, uint32_t unwritten = 0, bool scaled = false,
+                         uint32_t alpha_func = 0, float alpha_ref = 0) {
     std::lock_guard module_lock(g_module_lock);
-    static std::map<std::tuple<const ShaderInfo*, std::string, uint32_t, bool>, VkShaderModule> cache;
+    static std::map<std::tuple<const ShaderInfo*, std::string, uint32_t, bool, uint32_t, float>, VkShaderModule> cache;
     // The integer-vertex-input patch (skinned models' bone indices; without it Metal refuses every character's
     // pipeline, DEBUG.md #25/#26). NX_INT_ATTRIBS=0 turns it off.
     static const char* int_env = std::getenv("NX_INT_ATTRIBS");
     static const bool off = int_env && int_env[0] == '0';
     std::string k = kinds && !off ? std::string(reinterpret_cast<const char*>(kinds), 16) : std::string(16, '\0');
-    auto& m = cache[{s, k, unwritten, scaled}];
+    auto& m = cache[{s, k, unwritten, scaled, alpha_func, alpha_func ? alpha_ref : 0.0f}];
     if (!m) {
         const uint64_t module_t0 = plat::monotonic_ns();
         bool is_patched = false;
@@ -112,6 +114,11 @@ VkShaderModule module_of(const ShaderInfo* s, const uint8_t* kinds = nullptr, ui
             std::vector<uint32_t> patched;
             if (patch_x_scale(code, patched)) code.swap(patched);
             else log("nvn/vk: shader %s: screen scale not patched", s->hash.c_str());
+        }
+        if (alpha_func && s->stage == ShaderStage::Fragment) {
+            std::vector<uint32_t> patched;
+            if (patch_alpha_test(code, patched, alpha_func, alpha_ref)) code.swap(patched);
+            else log("nvn/vk: shader %s: alpha test %u not patched", s->hash.c_str(), alpha_func);
         }
         if (s->stage == ShaderStage::Vertex) clip_z_module(s, code);  // NX_CLIP_Z_PATCH (nvn_spirv_clip.cpp)
         nan_coords_module(code);  // nvn_spirv_nan.cpp
@@ -369,6 +376,8 @@ struct PipeBuild {
         bool has_kinds = false;
         uint32_t unwritten = 0;
         bool scaled = false;
+        uint32_t alpha_func = 0;
+        float alpha_ref = 0;
     } modules[2];
 };
 
@@ -431,7 +440,7 @@ VkPipeline compile(PipeBuild& b) {
     for (uint32_t k = 0; k < b.nstages; k++)
         if (!b.stages[k].module && b.modules[k].s) {
             const auto& mr = b.modules[k];
-            b.stages[k].module = module_of(mr.s, mr.has_kinds ? mr.kinds : nullptr, mr.unwritten, mr.scaled);
+            b.stages[k].module = module_of(mr.s, mr.has_kinds ? mr.kinds : nullptr, mr.unwritten, mr.scaled, mr.alpha_func, mr.alpha_ref);
         }
     const bool stats = pipe_stats_wanted(b.fs_hash);
     if (stats)
@@ -841,6 +850,7 @@ PipelineKey canonical_key(const PipelineKey& in) {
     k.uw_x = in.uw_x;
     k.fc_x = in.fc_x;
     k.fc_off = in.fc_off;
+    if (in.fs && in.alpha_func >= 1 && in.alpha_func <= 7) k.alpha_func = in.alpha_func, k.alpha_ref = in.alpha_ref;
     return k;
 }
 
@@ -879,6 +889,7 @@ std::unique_ptr<PipeBuild> prepare_graphics_pipeline(const PipelineKey& key, con
         const bool scaled = (s == key.vs && key.uw_x != 0) || (s == key.fs && key.fc_x != 0);
         auto& mr = B.modules[nstages - 1];  // made in compile(), off the replay thread when that is asynchronous
         mr.s = s, mr.unwritten = s == key.fs ? unwritten : 0, mr.scaled = scaled;
+        if (s == key.fs) mr.alpha_func = key.alpha_func, mr.alpha_ref = key.alpha_ref;
         if (s == key.vs && int_kinds) std::memcpy(mr.kinds, int_kinds, sizeof mr.kinds), mr.has_kinds = true;
         st.pName = "main";
         if (scaled) {  // screen scale: constants 0 and 1 of the patched vertex module (nvn_ultrawide.cpp)

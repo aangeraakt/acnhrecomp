@@ -351,6 +351,32 @@ void trace_draw(const Targets& t, uint32_t mode, bool indexed, const Cmd& c, con
         log("nvn: huge draw %llu: vs %s fs %s %s count %u x%u", (unsigned long long)g_stats.done, vs->hash.c_str(),
             fs ? fs->hash.c_str() : "-", indexed ? "indexed" : "arrays", count, instances);
     trace_cube_draw(t, vs, fs, tex_bindings, handles);
+    // NX_TRACE_TARGET_SIZE=<w>x<h>: the draws into colour targets of that size (300 at most), from the start.
+    static unsigned size_w = 0, size_h = 0;
+    static const bool by_size = [] {
+        const char* e = std::getenv("NX_TRACE_TARGET_SIZE");
+        return e && std::sscanf(e, "%ux%u", &size_w, &size_h) == 2;
+    }();
+    static int traced_size = 0;
+    static std::set<std::string> seen_size;  // each (target, shaders, blend) once
+    if (by_size && t.color_count && t.colors[0] && traced_size < 300)
+        if (GpuImage* img = image_of(t.colors[0]); img && img->width == size_w && img->height == size_h &&
+                                                   seen_size.insert(std::to_string(t.colors[0]) + vs->hash + (fs ? fs->hash : "") +
+                                                                    std::to_string(g_state.color.blend_enable[0])).second) {
+            traced_size++;
+            std::string tex;
+            for (size_t k = 0; k < handles.size() && k < 6; k++) {
+                char b[48];
+                const uint64_t tx = k < g_textures.resolved.size() ? g_textures.resolved[k].texture : 0;
+                const GpuImage* ti = tx ? image_of(tx) : nullptr;
+                std::snprintf(b, sizeof b, " %ux%u/%d", ti ? ti->width : 0, ti ? ti->height : 0, ti ? int(ti->format) : 0);
+                tex += b;
+            }
+            log("size draw %llu (frame %llu): target %llx vs %s fs %s count %u x%u blend %d mask %x textures%s",
+                (unsigned long long)g_stats.done, (unsigned long long)g_frame.load(std::memory_order_relaxed),
+                (unsigned long long)t.colors[0], vs->hash.c_str(), fs ? fs->hash.c_str() : "-", count, instances,
+                int(g_state.color.blend_enable[0]), unsigned(g_state.mask.mask[0]), tex.c_str());
+        }
     // NX_TRACE_3D=1: draws into a slice of a 3D texture (a colour-grading LUT), briefly (400 at most).
     static const bool trace_3d = std::getenv("NX_TRACE_3D") != nullptr;
     static int traced_3d = 0;

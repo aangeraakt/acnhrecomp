@@ -427,6 +427,9 @@ bool draw(VkCommandBuffer cb, const Targets& t, uint32_t mode, bool indexed, con
     key.color = g_state.color, key.mask = g_state.mask, key.depth = g_state.depth, key.polygon = g_state.polygon;
     key.color_count = t.color_count, key.depth_clamp = g_state.depth_clamp;
     key.alpha_to_coverage = g_state.alpha_to_coverage;
+    static const bool alpha_off = std::getenv("NX_ALPHA_TEST") && std::getenv("NX_ALPHA_TEST")[0] == '0';
+    if (!alpha_off && g_state.color.alpha_test >= 1 && g_state.color.alpha_test <= 7)
+        key.alpha_func = g_state.color.alpha_test, key.alpha_ref = g_state.alpha_ref;
     for (uint32_t k = 0; k < t.color_count; k++) {
         GpuImage* img = t.colors[k] ? image_of(t.colors[k]) : nullptr;
         key.color_formats[k] = img ? view_format(*img, t.views.format[k]) : unused_slot_format();

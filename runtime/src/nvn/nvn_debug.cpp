@@ -108,6 +108,19 @@ void debug_dump_textures(uint64_t frame) {
     static const std::vector<uint64_t> fixed = dump_list();
     std::vector<uint64_t> list = fixed;
     list.insert(list.end(), g_dump_extra.begin(), g_dump_extra.end());
+    // Live: a file dump_textures in the data folder ("<hex NVNtexture*>,..."), read whenever a frame is dumped.
+    if (FILE* f = plat::fopen_utf8(plat::data_root() + "/dump_textures", "rb")) {
+        char buf[1024] = {};
+        std::fread(buf, 1, sizeof buf - 1, f);
+        std::fclose(f);
+        for (char* e = buf; *e;) {
+            char* end = nullptr;
+            uint64_t t = std::strtoull(e, &end, 16);
+            if (end == e) break;
+            list.push_back(t);
+            e = *end == ',' ? end + 1 : end;
+        }
+    }
     g_dump_extra.clear();
     if (list.empty()) return;
     VkDevice d = vk_device();

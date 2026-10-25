@@ -323,6 +323,7 @@ struct Cmd {
         BindMultisampleState,  // n: alpha to coverage enabled (nvn_state.cpp)
         CopyBufferToTexture,   // a[0] source GPU address, a[1] texture; blob: view, region, flags (nvn_copy.cpp)
         CopyTextureToBuffer,   // a[0] texture, a[1] destination GPU address; blob: view, region, flags (nvn_copy.cpp)
+        SetAlphaRef,           // f[0]: the alpha test's reference (nvn_spirv_alpha.cpp)
     } op;
     uint32_t n = 0, mask = 0;
     uint64_t a[9] = {};  // textures (render targets: colors then depth), handles, GPU addresses, sizes, ...
