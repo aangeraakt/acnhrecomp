@@ -100,7 +100,10 @@ VkShaderModule module_of(const ShaderInfo* s, const uint8_t* kinds = nullptr, ui
         bool is_patched = false;
         const uint8_t* int_kinds = k != std::string(16, '\0') ? reinterpret_cast<const uint8_t*>(k.data()) : nullptr;
         std::vector<uint32_t> code = patched_spirv(s, int_kinds, unwritten, &is_patched);
-        if (scaled) {  // screen scale: gl_Position.xy * spec constants 0, 1
+        if (scaled && s->stage == ShaderStage::Fragment) {  // gl_FragCoord.xy * spec constants 2, 3
+            std::vector<uint32_t> patched;
+            if (patch_fragcoord_scale(code, patched)) code.swap(patched);
+        } else if (scaled) {  // screen scale: gl_Position.xy * spec constants 0, 1
             std::vector<uint32_t> patched;
             if (patch_x_scale(code, patched)) code.swap(patched);
             else log("nvn/vk: shader %s: screen scale not patched", s->hash.c_str());
@@ -333,6 +336,8 @@ struct PipeBuild {
     VkPipelineShaderStageCreateInfo stages[2]{};
     VkSpecializationInfo spec_info{};
     float uw_values[2] = {1.0f, 1.0f};  // the screen scale's constants 0 and 1 (vertex stage)
+    float fc_values[2] = {1.0f, 1.0f};  // gl_FragCoord's scale, constants 2 and 3 (fragment stage)
+    VkSpecializationInfo fc_spec{};
     uint32_t nstages = 0;
     std::vector<VkVertexInputAttributeDescription> attrs;
     std::vector<VkVertexInputBindingDescription> binds;
@@ -657,6 +662,15 @@ VkPipeline pipeline_for(const PipelineKey& canon, const ProgramLayout& layout, b
 
 void pipeline_skip_allowed(bool allowed) { g_skip_allowed = allowed; }
 
+bool fs_reads_fragcoord(const ShaderInfo* fs) {
+    static std::map<const ShaderInfo*, bool> memo;
+    if (!fs) return false;
+    auto it = memo.find(fs);
+    if (it != memo.end()) return it->second;
+    std::vector<uint32_t> code = patched_spirv(fs, nullptr, 0, nullptr), unused;
+    return memo[fs] = patch_fragcoord_scale(code, unused);
+}
+
 VkPipeline graphics_pipeline(const PipelineKey& key, const ProgramLayout& layout) {
     // By the key's bytes, as before, but hashed (nvn_pipeline.h) instead of a ~700-byte std::string built and
     // compared down a tree per draw; and the last entry first: consecutive draws mostly share their state.
@@ -806,6 +820,7 @@ PipelineKey canonical_key(const PipelineKey& in) {
     k.depth_clamp = in.depth_clamp && vk_features().depthClamp ? 1 : 0;
     k.alpha_to_coverage = in.alpha_to_coverage ? 1 : 0;
     k.uw_x = in.uw_x;
+    k.fc_x = in.fc_x;
     return k;
 }
 
@@ -841,7 +856,7 @@ std::unique_ptr<PipeBuild> prepare_graphics_pipeline(const PipelineKey& key, con
         auto& st = stages[nstages++];
         st.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         st.stage = VkShaderStageFlagBits(stage_bit(s->stage));
-        const bool scaled = s == key.vs && key.uw_x != 0;
+        const bool scaled = (s == key.vs && key.uw_x != 0) || (s == key.fs && key.fc_x != 0);
         st.module = module_of(s, s == key.vs ? int_kinds : nullptr, s == key.fs ? unwritten : 0, scaled);
         st.pName = "main";
         if (scaled) {  // screen scale: constants 0 and 1 of the patched vertex module (nvn_ultrawide.cpp)
@@ -849,6 +864,12 @@ std::unique_ptr<PipeBuild> prepare_graphics_pipeline(const PipelineKey& key, con
             B.uw_values[0] = key.uw_x > 0 ? key.uw_x : 1.0f, B.uw_values[1] = key.uw_x < 0 ? -key.uw_x : 1.0f;
             spec_info = {2, entries, 2 * sizeof(float), B.uw_values};
             st.pSpecializationInfo = &spec_info;
+        }
+        if (scaled && s == key.fs) {  // gl_FragCoord in 16:9 units: constants 2 and 3 (nvn_spirv_fragcoord.cpp)
+            static const VkSpecializationMapEntry entries[2] = {{2, 0, sizeof(float)}, {3, sizeof(float), sizeof(float)}};
+            B.fc_values[0] = key.fc_x > 0 ? key.fc_x : 1.0f, B.fc_values[1] = key.fc_x < 0 ? -key.fc_x : 1.0f;
+            B.fc_spec = {2, entries, 2 * sizeof(float), B.fc_values};
+            st.pSpecializationInfo = &B.fc_spec;
         }
     }
 

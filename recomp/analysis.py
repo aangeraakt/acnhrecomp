@@ -132,7 +132,9 @@ class Analysis:
         return self.functions[i] if i >= 0 and addr < self.functions[i].end else None
 
 
-def analyze(m, log=print):
+def analyze(m, log=print, patched=()):
+    """patched: text offsets a --variant patch wrote; a function whose patched code runs on past the end its FDE gives
+    (a routine grown into the padding after it) keeps those words instead of falling into a function that isn't."""
     cs = capstone.Cs(capstone.CS_ARCH_ARM64, capstone.CS_MODE_ARM)
     cs.skipdata = True
     t0, tn = m.text
@@ -187,6 +189,12 @@ def analyze(m, log=print):
                 entries.add(t) if _looks_like_code_pointer(an, a, t) else None
     entries.add(t0) if t0 in insns else None
     fde_bounds = {f.start: f.start + f.size for f in fdes}
+    grown = set(patched)
+    if grown:
+        for start, end in list(fde_bounds.items()):
+            while end in grown and end not in entries:
+                end += 4
+            fde_bounds[start] = end
     log(f"  seeds: {len(fdes)} FDE, {len(an.plt)} PLT stubs, {len(entries)} entries")
 
     # Fixpoint: build ranges, resolve jump tables, promote out-of-range branch targets to entries.

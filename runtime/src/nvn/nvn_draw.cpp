@@ -470,6 +470,10 @@ bool draw(VkCommandBuffer cb, const Targets& t, uint32_t mode, bool indexed, con
         // laid out over the 16:9 part like the rest of the layer; it is stretched back over the whole target.
         else if (samples_wide) key.uw_x = g_uw.ax() < 1.0f ? 1.0f / g_uw.ax() : -1.0f / g_uw.ay();
     }
+    // A pass over the whole widened target (not the squeezed UI) sees gl_FragCoord in the game's 16:9 units.
+    static const bool fc_off = std::getenv("NX_UW_FRAGCOORD") && std::getenv("NX_UW_FRAGCOORD")[0] == '0';
+    if (aniso && !fc_off && !(ui_x != 0 && key.uw_x == ui_x) && fs_reads_fragcoord(fs))
+        key.fc_x = g_uw.ax() < 1.0f ? g_uw.ax() : -g_uw.ay();
     if (g_uw.on) {  // NX_UW_TRACE=<first draw>:<count>, or a file uw_trace holding <count>: draws (wide = a scaled target)
         static const char* e = std::getenv("NX_UW_TRACE");
         static uint64_t from = 0, n = 0, next_check = 0;

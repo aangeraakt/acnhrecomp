@@ -78,6 +78,9 @@ struct PipelineKey {
     // Screen scale (nvn_ultrawide.cpp): the UI squeeze of the vertex stage, gl_Position.x * uw_x when positive,
     // gl_Position.y * -uw_x when negative (0: none, the unpatched module).
     float uw_x = 0;
+    // gl_FragCoord in 16:9 units on a widened target (nvn_spirv_fragcoord.cpp): .x * fc_x when positive, .y * -fc_x
+    // when negative (0: none, the unpatched module).
+    float fc_x = 0;
 };
 VkPipeline graphics_pipeline(const PipelineKey& key, const ProgramLayout& layout);
 // Under NX_ASYNC_PIPELINES, whether the next graphics_pipeline may skip its draw while the pipeline compiles: only a
@@ -96,6 +99,8 @@ void pipeline_warm_step();
 bool depth_remap();  // NX_CLIP_Z_PATCH: clip z -w..w mapped in the vertex shaders, not by VK_EXT_depth_clip_control
 bool patch_clip_z(const std::vector<uint32_t>& in, std::vector<uint32_t>& out);  // nvn_spirv_clip.cpp
 void clip_z_module(const ShaderInfo* s, std::vector<uint32_t>& code);
+bool patch_fragcoord_scale(const std::vector<uint32_t>& in, std::vector<uint32_t>& out);  // nvn_spirv_fragcoord.cpp
+bool fs_reads_fragcoord(const ShaderInfo* fs);  // its SPIR-V has gl_FragCoord (nvn_pipeline.cpp, memoized)
 bool patch_nan_coords(const std::vector<uint32_t>& in, std::vector<uint32_t>& out);  // nvn_spirv_nan.cpp
 void nan_coords_module(std::vector<uint32_t>& code);  // NaN texture coordinates read texel 0, as on Maxwell             // patch_clip_z if depth_remap
 
