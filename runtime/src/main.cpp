@@ -124,6 +124,8 @@ static void rtld_mark(CPU&) {}
 
 // nnMain, as called by nn::init::Start: the constructors need the program's allocator, which nninitStartup has
 // set up by now, so they run here, right before the real nnMain.
+void cpu_profile_register(const char* name);  // cpu_profile.cpp
+
 static void nn_main(CPU& c) {
     init_module(c, nx_module_sdk);
 #ifdef NX_HAS_SUBSDK0
@@ -132,6 +134,7 @@ static void nn_main(CPU& c) {
     init_module(c, nx_module_main);
     game::after_init();
     log("entering nnMain");
+    cpu_profile_register("main");  // NX_CPU_PROFILE (cpu_profile.cpp)
     uint64_t real = 0;
     for (size_t k = 0; k < nx_module_main.symbol_count; k++)
         if (!nx_module_main.symbols[k].imported && std::string(nx_module_main.symbols[k].name) == "nnMain")

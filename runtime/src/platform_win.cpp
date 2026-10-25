@@ -505,3 +505,7 @@ int main() {
     }
     return 0;
 }
+
+namespace nx {
+void cpu_profile_register(const char*) {}  // the sampling profiler is macOS and Linux only (cpu_profile.cpp)
+}  // namespace nx

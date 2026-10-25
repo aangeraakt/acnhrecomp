@@ -415,6 +415,8 @@ static uint32_t svc_wait_synchronization(CPU& c, uint64_t handles, int32_t count
 
 // ---- threads --------------------------------------------------------------------------------------------------
 
+void cpu_profile_register(const char* name);  // cpu_profile.cpp
+
 static void thread_main(void* p) {
     KThread* t = static_cast<KThread*>(p);
     t_self = t;
@@ -422,6 +424,7 @@ static void thread_main(void* p) {
     char name[16];
     std::snprintf(name, sizeof name, "g%llx", (unsigned long long)t->id);
     plat::set_thread_name(name);
+    cpu_profile_register(name);  // NX_CPU_PROFILE (cpu_profile.cpp)
     call(t->ctx, t->entry);
     // Returning from the entry point is like svcExitThread.
     std::lock_guard lk(g_k);

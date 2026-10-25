@@ -31,6 +31,7 @@ namespace nx {
 void svc_profile_mark(int role);
 void svc_profile_report(uint64_t frames, int role);
 bool frame_profile_on();
+void cpu_profile_register(const char* name);  // cpu_profile.cpp (NX_CPU_PROFILE; not on Android or Windows)
 void svc_frame_take(uint64_t& total, uint64_t& top_ns, uint32_t& top_imm, uint64_t& top_pc);
 uint64_t display_period_ns();
 extern std::atomic<uint64_t> g_tick_calls, g_yield_calls, g_sleep_calls;
@@ -592,7 +593,7 @@ void QueuePresentTexture(CPU& c) {
     tl("present>");
     {
         static thread_local bool marked = false;
-        if (!marked) marked = true, svc_profile_mark(2);
+        if (!marked) marked = true, svc_profile_mark(2), cpu_profile_register("present");
         static uint64_t n = 0;
         if (++n % 600 == 0) svc_profile_report(600, 2);
     }

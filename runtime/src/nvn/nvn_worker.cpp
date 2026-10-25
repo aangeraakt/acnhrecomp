@@ -14,6 +14,10 @@
 #include "nvn.h"
 #include "platform.h"
 
+namespace nx {
+void cpu_profile_register(const char* name);  // cpu_profile.cpp
+}
+
 namespace nx::nvn {
 
 namespace {
@@ -36,6 +40,7 @@ bool enabled() {
 
 void run() {
     plat::set_thread_name("nvn replay");
+    cpu_profile_register("replay");
     for (;;) {
         std::pair<uint64_t, std::function<void()>> job;
         {

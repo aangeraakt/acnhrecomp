@@ -736,3 +736,7 @@ extern "C" void android_main(android_app* app) {
         if (started) sleep_ns(2'000'000);
     }
 }
+
+namespace nx {
+void cpu_profile_register(const char*) {}  // the sampling profiler is macOS and Linux only (cpu_profile.cpp)
+}  // namespace nx
