@@ -6,6 +6,6 @@ struct ImFont;
 namespace nx::ui {
 
 bool settings_draw(float scale, ImFont* title);  // false once the player closed the screen
-void settings_hint(float scale);                 // the "F1: settings" hint shown for a few seconds at startup
+void settings_hint(float scale, float t);           // the "F1: settings" hint, t seconds into its showing (< 0: not yet)
 
 }  // namespace nx::ui

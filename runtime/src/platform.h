@@ -1,4 +1,5 @@
-// What the runtime needs from the host OS. platform_win.cpp and platform_android.cpp implement it.
+// What the runtime needs from the host OS. platform_mac.cpp, platform_linux.cpp, platform_android.cpp and, on Windows,
+// platform_win.cpp with platform_sdl.cpp implement it.
 #pragma once
 
 #include <cstddef>
@@ -44,7 +45,13 @@ std::string setting(const std::string& key);  // a player setting: config.txt (A
 
 // ---- display, input, audio ----
 void* create_window();       // native window handle for the Vulkan surface (HWND / ANativeWindow*), kept alive
+// Blocks until the next vertical blank of the display that shows the window (Windows: DXGI), and returns its time
+// (monotonic_ns); 0 when there is none to wait on, at once.
+uint64_t wait_vblank();
 void release_window(void* w);  // done with a handle from create_window
+// The game's first frame with something on it was presented. A window held back until then (made hidden when the
+// launcher passes NX_WINDOW_RECT, so the boot's black frames never replace the launcher's screen) is shown.
+void picture_shown();
 uint64_t window_generation();  // changes when the OS replaced the window (Android: app back from the background)
 bool window_minimized();     // no surface to draw to (minimized / app in background)
 void window_size(uint32_t& w, uint32_t& h);  // client size in pixels
@@ -61,7 +68,7 @@ inline constexpr const char* kDefaultResolution = "native";
 inline constexpr const char* kDefaultUpscaler = "linear";
 #endif
 
-// NpadButton bits (Nintendo layout: A is the right face button, B the bottom one).
+// NpadButton bits (console layout: A is the right face button, B the bottom one).
 enum : uint64_t {
     kA = 1ull << 0, kB = 1ull << 1, kX = 1ull << 2, kY = 1ull << 3, kStickL = 1ull << 4, kStickR = 1ull << 5,
     kL = 1ull << 6, kR = 1ull << 7, kZL = 1ull << 8, kZR = 1ull << 9, kPlus = 1ull << 10, kMinus = 1ull << 11,
@@ -83,7 +90,18 @@ void rumble(float low_freq, float high_freq, uint32_t duration_ms);
 // on the bars touches nothing.
 void set_mouse_touch(bool down, float u, float v);
 void set_picture_box(float x, float y, float w, float h);
-// Touch controls to draw over the picture (touch_layout.cpp, platform_android_input.cpp): circles at x, y (0..1
+// The PC keyboard as the console's USB keyboard (hle_hid.cpp): the held keys as USB HID usage ids (SDL's scancodes
+// are the same numbers) and KeyboardModifier bits. The game's text entry reads them; keyboard_typing() says it is
+// doing so now (it turned a key into a character lately), and while it is the keys stop driving the pad.
+void set_keyboard(uint64_t modifiers, const uint8_t keys[32]);
+bool keyboard_typing();
+// A game that can tell when its text entry is open says so each frame (games/acnh/v2_0_7.cpp): that decides typing
+// from then on, not the GetKeyCode guess (the game turns keys into characters whether its text entry is up or not).
+void keyboard_text_entry(bool open);
+bool keyboard_state_known();
+// Keys that type a character (letters, digits, space, punctuation): the ones whose press tells typing from playing.
+inline bool key_types(int usage) { return (usage >= 4 && usage <= 39) || (usage >= 44 && usage <= 56); }
+// Touch controls to draw over the picture (touch_layout.cpp): circles at x, y (0..1
 // across the landscape screen), radius r (a fraction of its height), opacity alpha. 0 where nothing is drawn.
 struct OverlayShape {
     float x, y, r, alpha;
@@ -97,6 +115,8 @@ void gpu_turbo();  // NX_GPU_TURBO=1: the Adreno GPU at its highest clock (perf_
 // Frame threads and present intervals (frame_stats.cpp): the cores they run on, their CPU time, NX_AFFINITY.
 // role 0: the thread that replays and presents (frame_presented ticks it); 1: the game's main thread.
 void frame_thread_tick(int role);
+// The host thread id of a role (0 replay+present, 1 game main) as last seen by frame_thread_tick, 0 before (sampler.cpp).
+uint64_t frame_thread_id(int role);
 void frame_presented();  // after each present to the display
 // Linux: asks power-profiles-daemon for its performance profile for as long as this process lives (frame_stats.cpp).
 void request_performance_profile();

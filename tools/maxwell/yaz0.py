@@ -1,4 +1,4 @@
-"""Yaz0 (Nintendo's LZ77 variant, ".szs"): the compression Animal Crossing: New Horizons uses next to zstd.
+"""Yaz0 (the console's LZ77 variant, ".szs"): the compression Animal Crossing: New Horizons uses next to zstd.
 
 Header: "Yaz0", u32 big-endian decompressed size, 8 reserved bytes. Then groups of a flag byte (MSB first) and
 eight items: a set bit copies one literal byte, a clear bit is a back-reference: two bytes `NR RR` (distance

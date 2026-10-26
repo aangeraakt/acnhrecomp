@@ -28,6 +28,19 @@ VkSamplerAddressMode vk_wrap(uint32_t w) {  // NVN: 0 clamp, 1 repeat, 2 mirror 
 
 // ---- samplers -------------------------------------------------------------------------------------------------------
 
+// video.anisotropy / NX_ANISOTROPY = 2, 4, 8 or 16: at least that much anisotropic filtering on the samplers that
+// filter linearly between mip levels (the ground, paths and walls seen at an angle stay sharp further away); the UI,
+// text, unfiltered and depth-compare samplers keep the game's own. Unset, "game" or 1: the game's (the console's).
+float forced_anisotropy() {
+    static const float v = [] {
+        const char* e = std::getenv("NX_ANISOTROPY");
+        int n = e ? std::atoi(e) : 0;
+        if (n < 2 || !vk_features().samplerAnisotropy) return 0.0f;
+        return float(std::min(n, 16));
+    }();
+    return v;
+}
+
 VkSampler sampler_for(const SamplerInfo& s, bool shadow) {
     // Asked per texture binding of every draw: the key is the state's bytes and the flag (what the std::string key
     // of before held, compared the same way), hashed; no allocation on a hit.
@@ -53,8 +66,10 @@ VkSampler sampler_for(const SamplerInfo& s, bool shadow) {
     // sampler return 0 (all text invisible).
     ci.minLod = m <= 1 ? 0.0f : std::max(0.0f, s.lod_min);
     ci.maxLod = m <= 1 ? 0.25f : std::max(ci.minLod, s.lod_max);  // no mipmapping: level 0 only
-    ci.anisotropyEnable = s.max_anisotropy > 1.0f;
-    ci.maxAnisotropy = std::min(s.max_anisotropy, 16.0f);
+    float aniso = s.max_anisotropy;
+    if (m == 5 && !shadow && s.mag_filter == 1) aniso = std::max(aniso, forced_anisotropy());
+    ci.anisotropyEnable = aniso > 1.0f;
+    ci.maxAnisotropy = std::min(aniso, 16.0f);
     ci.compareEnable = shadow;
     ci.compareOp = shadow ? vk_compare(s.compare_func) : VK_COMPARE_OP_ALWAYS;
     bool white = s.border[3] > 0.5f && s.border[0] > 0.5f;

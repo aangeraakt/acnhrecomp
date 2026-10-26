@@ -340,6 +340,9 @@ void section(const char* key) {
     ImGui::Dummy(ImVec2(0, 12 * g_scale));
 }
 
+// The choice that matches the console, tagged as such ("1080p (TV mode) · console original").
+std::string console(const char* key) { return std::string(tr(key)) + " · " + tr("common.console_tag"); }
+
 void page_video() {
     section("video.section.screen");
     row("video.display", nullptr, [&](float w) {
@@ -357,7 +360,7 @@ void page_video() {
 
     section("video.section.picture");
     // The screen's own first: the picture drawn at the window's rows and in its shape.
-    Choices resolutions = {{"window", tr("video.resolution.window")}, {"native", tr("video.resolution.native")}};
+    Choices resolutions = {{"window", tr("video.resolution.window")}, {"native", console("video.resolution.native")}};
 #if defined(__ANDROID__)
     resolutions.insert(resolutions.begin(), {"auto", tr("video.resolution.auto")});
 #endif
@@ -368,7 +371,7 @@ void page_video() {
     });
     row("video.aspect", "video.aspect.desc", [&](float w) {
         combo("video.aspect", "16:9",
-              {{"auto", tr("video.aspect.screen")}, {"16:9", tr("video.aspect.original")}, {"16:10", "16:10"},
+              {{"auto", tr("video.aspect.screen")}, {"16:9", console("video.aspect.original")}, {"16:10", "16:10"},
                {"4:3", "4:3"}, {"21:9", "21:9"}, {"32:9", "32:9"}, {"20:9", trf("video.aspect.phone", "20:9")},
                {"19.5:9", trf("video.aspect.phone", "19.5:9")}},
               w);
@@ -385,13 +388,23 @@ void page_video() {
         ImGui::Dummy(ImVec2(0, 4 * g_scale));
     }
     row("video.mode", nullptr, [&](float w) {
-        combo("video.mode", "docked", {{"docked", tr("video.render.docked")}, {"handheld", tr("video.render.handheld")}}, w);
+        combo("video.mode", "docked", {{"docked", console("video.render.docked")}, {"handheld", tr("video.render.handheld")}}, w);
     });
     row("video.upscaler", nullptr, [&](float w) {
         combo("video.upscaler", plat::kDefaultUpscaler, {{"linear", tr("video.upscaler.linear")}, {"fsr", tr("video.upscaler.fsr")}}, w);
     });
     if (config_get("video.upscaler", plat::kDefaultUpscaler) == "fsr")
         row("video.sharpness", nullptr, [&](float w) { slider("video.fsr_sharpness_pct", 0, 100, 80, "%d%%", w); });
+    row("video.aa", "video.aa.desc", [&](float w) {
+        combo("video.antialiasing", "off",
+              {{"off", console("video.aa.off")}, {"fxaa", tr("video.aa.fxaa")}, {"ssaa15", tr("video.aa.ssaa15")},
+               {"ssaa2", tr("video.aa.ssaa2")}},
+              w);
+    });
+    row("video.aniso", "video.aniso.desc", [&](float w) {
+        combo("video.anisotropy", "game",
+              {{"game", console("video.aniso.game")}, {"2", "2x"}, {"4", "4x"}, {"8", "8x"}, {"16", "16x"}}, w);
+    });
 
     section("video.section.performance");
     row("video.preset", "video.preset.desc", [&](float w) {
@@ -401,12 +414,12 @@ void page_video() {
               w);
     });
     row("video.framerate", "video.framerate.desc", [&](float w) {
-        combo("video.frame_rate", "30", {{"30", tr("video.framerate.30")}, {"60", tr("video.framerate.60")}}, w);
+        combo("video.frame_rate", "30", {{"30", console("video.framerate.30")}, {"60", tr("video.framerate.60")}}, w);
     });
     // Built-in (nvn_framegen.cpp) always; lsfg-vk when it is installed (or already chosen).
     bool lsfg = lsfg_available();
     std::string fg = config_get("video.frame_gen", "off");
-    Choices fg_choices = {{"off", tr("video.framegen.off")}, {"builtin", tr("video.framegen.builtin")}};
+    Choices fg_choices = {{"off", console("video.framegen.off")}, {"builtin", tr("video.framegen.builtin")}};
     if (lsfg || fg == "lsfg") fg_choices.push_back({"lsfg", tr("video.framegen.lsfg")});
     const char* fg_desc = fg == "lsfg" ? (lsfg ? "video.framegen.desc" : "video.framegen.missing") : "video.framegen.builtin.desc";
     row("video.framegen", fg_desc, [&](float w) { combo("video.frame_gen", "off", fg_choices, w); });
@@ -456,8 +469,8 @@ void page_controls() {
         ImGui::TextWrapped("%s", name.empty() ? tr("controls.none") : name.c_str());
     });
     row("controls.layout", nullptr, [&](float w) {
-        combo("input.layout", "nintendo",
-              {{"nintendo", tr("controls.layout.nintendo")}, {"xbox", tr("controls.layout.xbox")}}, w);
+        combo("input.layout", "console",
+              {{"console", tr("controls.layout.console")}, {"xbox", tr("controls.layout.xbox")}}, w);
     });
     row("controls.glyphs", nullptr, [&](float w) {
         combo("controls.glyphs", "auto",
@@ -985,15 +998,40 @@ bool settings_draw(float scale, ImFont* title) {
     return open;
 }
 
-void settings_hint(float scale) {
+void settings_hint(float scale, float t) {
+    // A pill at the bottom centre (the game's own loading mark is at the bottom right): it rises into place and
+    // fades in, stays a while, and leaves faster than it came.
+    constexpr float kIn = 0.45f, kStay = 7.0f, kOut = 0.25f;
+    if (t < 0 || t > kIn + kStay + kOut) return;
+    auto out_quart = [](float x) { return 1 - std::pow(1 - std::clamp(x, 0.0f, 1.0f), 4.0f); };
+    float a, dy;
+    if (t < kIn + kStay) {
+        float e = out_quart(t / kIn);
+        a = e, dy = (1 - e) * 12.0f;
+    } else {
+        float e = out_quart((t - kIn - kStay) / kOut);
+        a = 1 - e, dy = e * 6.0f;
+    }
+    auto fade = [a](int r, int g, int b, int alpha) { return rgb(r, g, b, int(float(alpha) * a)); };
     ImGuiIO& io = ImGui::GetIO();
     const char* text = tr("app.hint_open");
     ImVec2 ts = ImGui::CalcTextSize(text);
-    float pad = 14.0f * scale;
-    ImVec2 p(io.DisplaySize.x - ts.x - pad * 3, io.DisplaySize.y - ts.y - pad * 3);
+    const float h = ts.y + 20.0f * scale, ir = h * 0.5f - 5.0f * scale, gap = 10.0f * scale, pad = 18.0f * scale;
+    const float w = 5.0f * scale + ir * 2 + gap + ts.x + pad;
+    ImVec2 p(std::floor((io.DisplaySize.x - w) * 0.5f), io.DisplaySize.y - h - 28.0f * scale + dy * scale);
+    ImVec2 q(p.x + w, p.y + h);
     ImDrawList* dl = ImGui::GetForegroundDrawList();
-    dl->AddRectFilled(p, ImVec2(p.x + ts.x + pad * 2, p.y + ts.y + pad * 2), rgb(255, 249, 232, 235), (ts.y + pad * 2) * 0.5f);
-    dl->AddText(ImVec2(p.x + pad, p.y + pad), rgb(107, 79, 54), text);
+    for (int k = 3; k >= 1; k--) {  // a soft shadow below, made of widening layers
+        float s = float(k) * 2.0f * scale;
+        dl->AddRectFilled(ImVec2(p.x - s * 0.5f, p.y + s), ImVec2(q.x + s * 0.5f, q.y + s * 1.2f), fade(40, 30, 20, 18),
+                          h * 0.5f + s);
+    }
+    dl->AddRectFilled(p, q, fade(255, 249, 232, 245), h * 0.5f);
+    dl->AddRect(p, q, fade(255, 255, 255, 160), h * 0.5f, 0, 1.0f * scale);
+    ImVec2 c(p.x + 5.0f * scale + ir, p.y + h * 0.5f);
+    dl->AddCircleFilled(c, ir, fade(118, 200, 170, 255));
+    theme_icon(dl, kIconGear, c, ir * 0.62f, fade(255, 255, 255, 255));
+    dl->AddText(ImVec2(c.x + ir + gap, p.y + (h - ts.y) * 0.5f), fade(107, 79, 54, 255), text);
 }
 
 }  // namespace nx::ui

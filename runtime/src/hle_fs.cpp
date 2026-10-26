@@ -689,7 +689,7 @@ void MountCacheStorage(CPU& c) {  // (name, int index)
     c.x[0] = kOk;
 }
 
-// ---- add-on content (DLC): aoc/<index>/, written by the importer from the add-on NSPs ----------------------------
+// ---- add-on content (DLC): aoc/<index>/, from the game folder (one RomFS folder per add-on) -------------------------
 // nn::aoc answers with the indexes found there, nn::fs::MountAddOnContent mounts one of them. Without the folder the
 // game sees no add-on content, as on a console that never bought any.
 std::vector<int> aoc_indexes() {

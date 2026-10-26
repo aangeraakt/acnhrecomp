@@ -8,21 +8,17 @@
   </a>
 </p>
 
-<p align="center">
-  <img src="docs/screenshots/island-arrival.jpg" alt="Arriving on the island, running natively" width="100%">
-</p>
-
-ACNHRecomp turns the Nintendo Switch code of *Animal Crossing: New Horizons* **3.0.2** (title ID
-`01006F8002326000`) into native code for your computer. It is not an emulator: the game's AArch64 machine code is
+ACNHRecomp turns the Switch code of *Animal Crossing: New Horizons* (title ID `01006F8002326000`; version 3.0.2
+recommended, 3.0.3, 2.0.7 and 1.0.0 supported) into native code for your computer. It is not an emulator: the game's AArch64 machine code is
 translated ahead of time into C++ and compiled for the host, the system services the game calls are reimplemented
 natively, and the game's NVN graphics calls are translated to **Vulkan**. It is built on the framework of
 [SuperMarioWonderRecomp](https://github.com/BelmanteGu/SuperMarioWonderRecomp).
 
 > [!IMPORTANT]
 > **No game files are included.** This repository contains no code, assets, keys or firmware from the game, and
-> neither does anything the project shares. You need your own legally obtained copy of the game, its 3.0.2 update
-> and your console's keys; the build is produced on your computer from your dump. Never distribute the resulting
-> executable: it contains game code recompiled from your dump.
+> neither does anything the project shares. It does not decrypt or unpack game containers either: it reads a folder
+> with the game's executables and files that you prepared yourself from your own legally obtained copy, and builds the
+> port from it on your computer. Never distribute the resulting executable or your game folder: they contain the game.
 
 > [!NOTE]
 > The detailed developer documentation ([docs/STATUS.md](docs/STATUS.md), [docs/REFERENCES.md](docs/REFERENCES.md))
@@ -39,7 +35,7 @@ natively, and the game's NVN graphics calls are translated to **Vulkan**. It is 
 Whether you're playing, helping test builds across different hardware, or following the project's progress, everyone is welcome!
 
 - 🏝️ **Community & Discussion**: Hang out, share your island, and discuss Animal Crossing recompilation.
-- 💬 **Help & Support**: Get quick guidance with key dumping, game imports, building, and troubleshooting.
+- 💬 **Help & Support**: Get quick guidance with building and troubleshooting.
 - ⚙️ **Testing & Hardware**: Share logs, test results across different CPUs and GPUs, and report bugs.
 - 📢 **Development Updates**: Get real-time announcements, test builds, and sneak peeks at upcoming features.
 
@@ -47,7 +43,6 @@ Whether you're playing, helping test builds across different hardware, or follow
 
 - [Community](#community)
 - [Features](#features)
-- [Screenshots](#screenshots)
 - [Status](#status)
 - [Disclaimer](#disclaimer)
 - [Requirements](#requirements)
@@ -75,40 +70,21 @@ Whether you're playing, helping test builds across different hardware, or follow
 - **Resolution and display options:** 1080p (TV mode) or 720p (handheld mode), AMD FSR 1 upscaling with adjustable
   sharpness, wider aspect ratios (16:10, 21:9, 32:9 and phone ratios), windowed or fullscreen.
 - **Controllers:** any controller SDL3 recognises (Xbox, PlayStation, Switch Pro Controller / Joy-Con, generic
-  pads), a Nintendo or Xbox/PlayStation confirm-button layout, and in-game button icons redrawn for Xbox,
+  pads), a Switch or Xbox/PlayStation confirm-button layout, and in-game button icons redrawn for Xbox,
   PlayStation or Switch. Fully remappable keyboard controls.
+- **Mouse and keyboard:** the mouse works as the console's touch screen (window buttons, list items and dialogue
+  choices take a click; a click while a message waits advances it), and the PC keyboard types names and messages
+  wherever the game's text entry is open.
 - **Save management:** import from Switch backups (JKSV, Checkpoint), from emulators (yuzu and its forks,
   Ryujinx/Ryubing) or from another ACNHRecomp; export in a format JKSV and Checkpoint can restore on a console;
   automatic backups.
 - **All 14 game languages**, plus Brazilian Portuguese through a fan translation you install yourself, loaded as a
   RomFS mod (LayeredFS).
-- **DLC** (add-on content) from your own NSPs.
+- **DLC** (add-on content) from your game folder's `aoc/`.
 - **Island clock** follows your computer's date, time and time zone, as on the console.
 - **Performance work for modest hardware:** presets for integrated GPUs, an option to bypass the CPU-heavy audio
   reverb, pipelined GPU submits, AES-NI acceleration of the game's data decryption during loads, and a shader
   pre-compilation pass at startup.
-
-## Screenshots
-
-Captured from the recompiled game running on Linux (x86-64, Vulkan), at 1080p.
-
-| | |
-|:---:|:---:|
-| ![The island from above](docs/screenshots/island-aerial.jpg) | ![Walking among the island's trees](docs/screenshots/island-trees.jpg) |
-| *The island from the seaplane* | *Exploring the island* |
-| ![Tom Nook's welcome at Nook Inc.](docs/screenshots/nook-inc.jpg) | ![Choosing a character style](docs/screenshots/character-style.jpg) |
-| *Nook Inc.'s Deserted Island Getaway Package* | *Creating a resident* |
-| ![Picking an island layout](docs/screenshots/island-choice.jpg) | ![Brazilian Portuguese fan translation](docs/screenshots/ptbr-dialogue.jpg) |
-| *Picking an island layout* | *Brazilian Portuguese through a fan-translation mod* |
-
-### Settings and launcher
-
-| | |
-|:---:|:---:|
-| ![Settings screen, video page](docs/screenshots/settings-video.jpg) | ![Settings screen, controls page](docs/screenshots/settings-controls.jpg) |
-| *In-game settings (F1): video* | *In-game settings: controls* |
-| ![Launcher welcome page](docs/screenshots/launcher-welcome.jpg) | ![Launcher building the game](docs/screenshots/launcher-build.jpg) |
-| *The launcher: first start* | *The launcher recompiling the game on your computer* |
 
 ## Status
 
@@ -117,7 +93,6 @@ GPU; see [docs/STATUS.md](docs/STATUS.md) for the full, regularly updated log.
 
 | Area | State |
 |---|---|
-| Import (base NSP + 3.0.2 update, BKTR patch applied) | Working: 103,400 RomFS files, 10.5 GB |
 | CPU recompilation (`main`, `sdk`, `subsdk0`) | Working: about 19 million instructions, 0 unhandled |
 | Shaders (Maxwell to SPIR-V) | Working: 6,200+ distinct blocks, 0 invalid |
 | Boot, system services, audio, clock, input | Working |
@@ -144,15 +119,16 @@ GPU; see [docs/STATUS.md](docs/STATUS.md) for the full, regularly updated log.
 | Platform | State |
 |---|---|
 | Linux x86-64 | Tested (Ubuntu, clang 21, Intel Iris Xe / Mesa ANV) |
-| macOS (Apple Silicon, MoltenVK) | Build and launch scripts exist; untested |
-| Windows | Not supported yet |
+| macOS (Apple Silicon, MoltenVK) | Tested (M1, macOS 26/27, Homebrew's MoltenVK) |
+| Windows x86-64 | Builds with `tools/setup_acnh.py` (clang-cl, SDL3); contributed by a fork, not tested here |
 | Android | Not supported yet |
 
 ## Disclaimer
 
 ACNHRecomp is an unofficial fan project. It is not affiliated with, endorsed by or sponsored by Nintendo.
 *Animal Crossing* is a trademark of Nintendo. The project does not provide, and will not help you obtain, game
-files, keys or firmware. It only works with a copy of the game you dumped yourself from hardware you own.
+files, keys or firmware, and contains no tool to decrypt or unpack them. It only works with a copy of the game you
+prepared yourself from hardware and software you own.
 
 A pre-commit hook ([tools/check_no_game_data.sh](tools/check_no_game_data.sh)) refuses commits that contain game
 files, keys, shader binaries, recompiled game code or binary blobs. Everything derived from your dump stays in
@@ -163,15 +139,19 @@ via Claude Code), directed and tested by a person. Its base, SuperMarioWonderRec
 
 ## Requirements
 
-### Your game files
+### Your game folder
 
-| File | Required |
-|---|---|
-| `prod.keys` dumped from your console | Yes |
-| `title.keys` | Recommended |
-| Base game NSP | Yes |
-| Update 3.0.2 NSP | Yes |
-| DLC NSPs (add-on content) | Optional |
+A folder with the game's executables and files from your own copy, laid out as an ExeFS + RomFS dump:
+
+| Path | Contents | Required |
+|---|---|---|
+| `exefs/` | `main`, `sdk`, `subsdk0` (the game's executables, NSO) and `main.npdm` | Yes |
+| `romfs/` | The game's files, with the update applied (about 10.5 GB). `extract/romfs/` is accepted too | Yes |
+| `aoc/<index>/` | Add-on content (DLC), one folder per add-on | Optional |
+
+Version 3.0.2 (or 3.0.3) gets every fix of the port (native 60 FPS, wide screens, the mouse); 2.0.7 and 1.0.0 play
+with picture, sound and the mouse; any other version is built as it is ([docs/VERSIONS.md](docs/VERSIONS.md)). The
+setup links to this folder instead of copying it: keep it where it is.
 
 ### Computer
 
@@ -198,16 +178,20 @@ brew install llvm cmake ninja sdl3 molten-vk vulkan-loader libvpx libvorbis
 `libvpx` and `libvorbis` decode the opening movie (VP9 + Vorbis). Without them the game still runs, but the movie
 is black.
 
+Windows: Python 3 (`winget install Python.Python.3.13`) and the Visual Studio C++ build tools (`winget install
+Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools
+--includeRecommended"`); the setup fetches LLVM (clang-cl) and SDL3 itself.
+
 The setup script downloads everything else into `private/third_party/`: a Python virtual environment (capstone,
-lz4, zstandard, fonttools, cmake, ninja, unicorn), Vulkan-Headers 1.4.357, the .NET SDK 10.0.401, the Ryubing
-shader translator source and Dear ImGui.
+lz4, zstandard, fonttools, cmake, ninja, unicorn), Vulkan-Headers 1.4.357, the .NET SDK 10.0.401 (unless the system
+has .NET 10), the Ryubing shader translator source and Dear ImGui.
 
 ## Installation
 
 ### With the launcher (recommended)
 
 The launcher is a small program, built from this repository alone, that does the whole setup with you: it asks
-for your files, checks this computer, recompiles the game and then starts it. It uses the same look as the in-game
+for your game folder, checks this computer, recompiles the game and then starts it. It uses the same look as the in-game
 settings screen, follows the system language (12 languages, changeable at any time from the top right) and works
 from small laptop screens to 4K.
 
@@ -221,15 +205,14 @@ then run `build/launcher/acnhrecomp_launcher`.
 
 1. **Welcome.** Choose *Set up from my game files*, or *I already have a recompiled build* and pick its folder (an
    install folder made by the launcher, `private/acnh`, or this repository).
-2. **Game files.** The keys (`prod.keys`, found automatically in `~/.switch` and the emulators' folders), the base
-   game (NSP or XCI), update 3.0.2 (NSP), any DLC NSPs and, optionally, the pt-BR translation `.zip` (not
-   distributed here). Choose them or drop them on the window. Each file is checked at once without decrypting
-   anything: container type, and the title and version from the NSP's metadata, so a wrong game, the update in
-   the base game's place or another update version is flagged before anything runs.
+2. **Your game.** The game folder (see [Requirements](#your-game-folder)) and, optionally, the pt-BR translation
+   `.zip` (not distributed here). Choose them, let Search find them in your usual folders, or drop them on the
+   window. The folder is checked at once: its layout, its executables and the game version from main's build id
+   (nothing is decrypted or unpacked).
 3. **Install.** Where the game goes (default `~/.local/share/ACNHRecomp`, `~/Library/Application Support/ACNHRecomp`
    on macOS), and a check of this computer: compiler, Python, curl/tar, SDL3 development files, Vulkan driver,
    movie libraries, disk space and memory, with the command that installs what is missing.
-4. **Build.** Runs `tools/setup_acnh.sh --out <install folder>` and follows it: stages, progress (ninja's own
+4. **Build.** Runs `tools/setup_acnh.py --game <game folder> --out <install folder>` and follows it: stages, progress (ninja's own
    counter during the compile, with an estimate of the time left), the full log, Stop. If a stage fails, the page
    says which, keeps the log open and offers *Copy log*, *Open logs folder* and *Try again* (finished stages are
    not redone).
@@ -240,32 +223,29 @@ rendering, upscaling, frame rate; written to the game's `config.ini`), **Rebuild
 repository) and **Change build folder**. Its own settings are in `launcher.ini` in the user's settings folder
 (`~/.local/share/ACNHRecomp` on Linux).
 
-Windows: the launcher builds and runs (`cmake --build ... --target acnhrecomp_launcher` with SDL3 available to
-CMake), and can start a build made elsewhere, but the recompile pipeline is a bash script: run the setup on Linux,
-macOS or inside WSL2, then choose that folder.
+Windows: the launcher runs `tools/setup_acnh.py` with Python as on the other systems (the Python launcher `py`,
+or `python` on PATH).
 
 ### From the command line
 
 ```sh
 git clone <this repository> ACNHRecomp && cd ACNHRecomp
-tools/setup_acnh.sh --keys ~/switch/prod.keys --title-keys ~/switch/title.keys \
-                    --base ~/switch/base.nsp --update ~/switch/update.nsp \
-                    --dlc ~/switch/dlc1.nsp --dlc ~/switch/dlc2.nsp
+python3 tools/setup_acnh.py --game ~/ACNH-game          # Windows: py tools\setup_acnh.py --game C:\ACNH-game
 ```
 
-`--dlc` can be repeated, once per add-on NSP, or left out. To add a DLC later, run the same command again with the
-`--dlc` options; the existing import is reused.
+To add DLC later, put it in the game folder's `aoc/` and run the setup again. `tools/setup_acnh.sh` runs the same
+script, for scripts that call it by that name.
 
 `--out <folder>` puts the game's files (import, generated code, build, logs) in that folder instead of
 `private/acnh`; start the game from such a folder with `NX_DATA_ROOT=<folder> <folder>/build/acnh`.
 
 The script runs in stages and skips every stage whose output already exists. If something fails, fix it and run
-`tools/setup_acnh.sh` again (after the first import no arguments are needed).
+`tools/setup_acnh.py` again (once the game folder is linked, no arguments are needed).
 
 | Stage | Output | Time (12 threads, 30 GB RAM) |
 |---|---|---|
-| Tools | `private/venv`, `private/third_party/*`, importer and shader harness | about 5 min |
-| Import | `private/acnh/{analysis,exefs,extract/romfs}` | about 5 min |
+| Tools | `private/venv`, `private/third_party/*`, shader harness | about 5 min |
+| Game | `private/acnh/{exefs,extract/romfs,aoc}` linked to the game folder, `analysis/*.bin` | seconds |
 | Recompile | `private/acnh/gen/{main,sdk,subsdk0}` (1.6 GB of C++) | about 8 min |
 | Shaders | `private/acnh/spirv` | about 2 min |
 | Fonts and button icons | `private/acnh/fonts` | under a minute |
@@ -274,10 +254,10 @@ The script runs in stages and skips every stage whose output already exists. If 
 | Variable | Effect |
 |---|---|
 | `JOBS=<n>` | Compiler jobs (default: RAM in GB divided by 3, at most the core count) |
-| `FORCE=<stage>` | Redo one stage: `import`, `recomp`, `shaders`, `harness`, `glyphs` |
+| `FORCE=<stage>` | Redo one stage: `game`, `recomp`, `shaders`, `harness`, `glyphs` |
 
-To check your dump: the importer prints `import complete: 103400 RomFS files, 10.50 GB`, and the recompiler ends
-with `unhandled 0` for each of the three modules.
+To check your game folder: the version stage prints the version and main's build id, and the recompiler ends with
+`unhandled 0` for each of the three modules.
 
 ## Playing
 
@@ -337,7 +317,7 @@ Japanese, Korean, Simplified Chinese and Traditional Chinese.
 | Page | Options |
 |---|---|
 | Game | Game language (automatic from the system, the game's 14 languages, Brazilian Portuguese fan translation); menu language |
-| Video | Quality preset (quality, balanced, low), windowed / fullscreen, window size, game mode (1080p TV mode or 720p handheld mode), internal resolution (540p to 2160p/4K, or the window's), upscaling (bilinear or FSR 1, with sharpness), aspect ratio (16:9, automatic from the window, 16:10, 4:3, 21:9, 32:9, phone ratios; applied live), frame rate, frame generation (built-in, or lsfg-vk if installed), GPU (automatic, dedicated, integrated), prepare shaders at startup |
+| Video | Quality preset (quality, balanced, low), windowed / fullscreen, window size, game mode (1080p TV mode or 720p handheld mode), internal resolution (540p to 2160p/4K, or the window's), upscaling (bilinear or FSR 1, with sharpness), anti-aliasing (FXAA, supersampling), anisotropic filtering, aspect ratio (16:9, automatic from the window, 16:10, 4:3, 21:9, 32:9, phone ratios; applied live), frame rate, frame generation (built-in, or lsfg-vk if installed), GPU (automatic, dedicated, integrated), prepare shaders at startup |
 | Audio | Master volume, environmental reverb, mute when the window is in the background |
 | Controls | Connected controller, confirm/cancel layout, button icons, vibration, stick dead zone, keyboard remapping |
 | Saves | Open the save folder, back up now, import, export, saves found on this computer, restore backups |
@@ -359,6 +339,8 @@ restart are marked on the screen. Environment variables set on the command line 
 | `video.upscaler` | `linear`, `fsr` | `NX_FSR` |
 | `video.fsr_sharpness_pct` | `0`-`100` | `NX_FSR_SHARP` |
 | `video.resolution` | `native`, `540`, `720`, `900`, `1080`, `1440`, `2160`, `window` | `NX_RENDER_HEIGHT` |
+| `video.antialiasing` | `off`, `fxaa`, `ssaa15`, `ssaa2` (supersampling 1.5x / 2x) | `NX_AA` |
+| `video.anisotropy` | `game`, `2`, `4`, `8`, `16` | `NX_ANISOTROPY` |
 | `video.aspect` | `16:9`, `auto`, `16:10`, `4:3`, `21:9`, `32:9`, phone ratios, any `W:H` | `NX_ULTRAWIDE` |
 | `video.gpu` | `auto`, `discrete`, `integrated` | `NX_GPU` |
 | `video.frame_rate` | `30`, `60` | `NX_PRESENT_INTERVAL` |
@@ -367,7 +349,7 @@ restart are marked on the screen. Environment variables set on the command line 
 | `audio.volume` | `0`-`100` | |
 | `audio.reverb` | `0`, `1` | `NX_AUDIO_REVERB` |
 | `audio.mute_background` | `0`, `1` | |
-| `input.layout` | `nintendo`, `xbox` | |
+| `input.layout` | `console`, `xbox` (`nintendo` is read as `console`) | |
 | `controls.glyphs` | `auto`, `switch`, `xbox`, `playstation` | |
 | `input.rumble` | `0`, `1` | |
 | `input.deadzone` | `5`-`50` (percent) | |
@@ -453,7 +435,7 @@ project**: it consists of modified game files, and its author asks that it not b
 package, install it from your own copy:
 
 ```sh
-tools/setup_acnh.sh --mod ptbr=~/Downloads/<translation package>.zip
+python3 tools/setup_acnh.py --mod ptbr=~/Downloads/<translation package>.zip
 ```
 
 Then choose "Português (Brasil)" as the game language (or leave it on Automatic on a Portuguese system). The
@@ -467,19 +449,19 @@ with `game.mods = <name>[,<name>...]` in `config.ini`.
 
 ## Building from source
 
-`tools/setup_acnh.sh` is the supported path. What it does, step by step:
+`tools/setup_acnh.py` is the supported path. What it does, step by step:
 
 ```sh
 P=private/venv/bin/python
-# 1. Import ExeFS + RomFS with the update applied (and any DLC)
-private/build/importer/nximport --exefs --title 01006F8002326000 --out private/acnh \
-    private/keys/prod.keys title.keys base.nsp update.nsp
-# 2. Recompile the three modules
+# 1. Link the game folder, and the modules as loaded for the shader extraction
+ln -s ~/ACNH-game/exefs private/acnh/exefs; mkdir -p private/acnh/extract; ln -s ~/ACNH-game/romfs private/acnh/extract/romfs
+for m in main sdk subsdk0; do $P tools/nso2bin.py private/acnh/exefs/$m private/acnh/analysis/$m.bin; done
+# 2. Recompile the three modules (main with the hooks of its version: tools/acnh_version.py, games/acnh/versions.txt)
 $P -m recomp private/acnh/exefs/main    private/acnh/gen/main    --name main    --base 0x4000000000
 $P -m recomp private/acnh/exefs/sdk     private/acnh/gen/sdk     --name sdk     --base 0x4010000000
 $P -m recomp private/acnh/exefs/subsdk0 private/acnh/gen/subsdk0 --name subsdk0 --base 0x4018000000
 # 3. Extract and translate the shaders
-tools/extract_shaders.sh private/acnh
+$P tools/extract_shaders.py private/acnh
 dotnet private/build/spirv_harness/bin/Release/net10.0/spirv_harness.dll \
     --batch private/acnh/shaders_extracted --out private/acnh/spirv --jobs 8 --spirv-val /usr/bin/spirv-val
 # 4. Button icons from the game's own icon font
@@ -492,8 +474,6 @@ ninja -C private/acnh/build acnh
 
 Notes:
 
-- The setup script filters malformed lines out of `prod.keys` (some key dumps contain entries the importer does
-  not need) and writes the cleaned copy to `private/keys/`.
 - The recompiler is re-run when `recomp/emit.py` is newer than the generated code.
 - Recompiling `main` needs about 3 GB of RAM; compiling the generated C++ is the long step, and memory, not cores,
   usually limits the job count.
@@ -518,15 +498,15 @@ its parameter file from your dump and recompiles `main` with it as a second vers
 Then Settings > Video > Frame rate > 60. The game's speed follows the frame rate, so it plays slower wherever the
 computer cannot hold 60.
 
-**The setup stops with "first run: pass --keys, --base and --update".**
-The import has not been done yet; pass all three on the first run.
+**The setup stops with "no game in ...: pass --game".**
+The game folder has not been linked yet: pass `--game <your game folder>` on the first run.
 
-**The importer fails or the file count is wrong.**
-Check that the update is exactly **3.0.2**, that your `prod.keys` come from a console with firmware recent enough
-for it, and pass `--title-keys` if you have them. The import log is in `private/acnh/logs/import.log`.
+**The setup says the game folder has no exefs/ and romfs/, or that romfs/ has no Shader/ folder.**
+Choose the folder that holds both `exefs/` and `romfs/` (see [Requirements](#your-game-folder)), with the update
+already applied to `romfs/`.
 
 **The build runs out of memory.**
-Lower the job count, for example `JOBS=4 tools/setup_acnh.sh`.
+Lower the job count, for example `JOBS=4 python3 tools/setup_acnh.py`.
 
 **The opening movie is black.**
 Install `libvpx` and `libvorbis` (development packages) and rebuild.
@@ -564,10 +544,10 @@ Join our [Discord Community](https://discord.gg/VJW9Dtdu7a) with your hardware d
 | `recomp/` | AArch64 to C++ static recompiler (Python, Capstone) |
 | `runtime/` | Shared runtime: Horizon kernel, IPC and services, `nn::*` HLE, NVN to Vulkan, settings UI, platform layers |
 | `games/acnh/` | ACNH-specific code (name, program ID, engine hooks, diagnostics) |
-| `tools/importer/` | NSP/XCI import: keys, tickets, NCA, BKTR, RomFS |
 | `tools/maxwell/` | Shader container extraction and the Maxwell to SPIR-V harness |
 | `launcher/` | The first-run launcher: file checks, setup pipeline, home page (no game code) |
-| `tools/setup_acnh.sh`, `tools/launcher.sh`, `tools/acnh_linux.sh`, `tools/acnh_mac.sh` | Setup and launch scripts |
+| `tools/setup_acnh.py`, `tools/launcher.sh`, `tools/acnh_linux.sh`, `tools/acnh_mac.sh` | Setup and launch scripts |
+| `tools/acnh_version.py`, `games/acnh/versions.txt` | The game version a folder holds, by main's build id, and its hooks |
 | `tools/check_no_game_data.sh` | Pre-commit hook that blocks game data |
 | `tests/` | Recompiler differential test (Unicorn) and runtime unit tests |
 | `docs/` | `STATUS.md` (progress), `ACNH.md` (the game), `REFERENCES.md` (reference projects), `upstream/` (framework docs) |
@@ -576,7 +556,7 @@ Join our [Discord Community](https://discord.gg/VJW9Dtdu7a) with your hardware d
 ## How it works
 
 ```
- your dump (base NSP + update)          tools/importer (nximport): keys, NCA, BKTR, RomFS
+ your game folder (exefs/, romfs/, aoc/)
           |
           |-- ExeFS: main, sdk, subsdk0 --> recomp/ (Python + Capstone): AArch64 -> C++ ---+
           |                                                                                |--> clang --> private/acnh/build/acnh
@@ -587,15 +567,15 @@ Join our [Discord Community](https://discord.gg/VJW9Dtdu7a) with your hardware d
                                                                                  NVN -> Vulkan, SDL3
 ```
 
-1. **Import.** The importer reads your NSPs without hactool, decrypts the NCAs and applies the 3.0.2 update's BKTR
-   patch (including the newer format) to produce the ExeFS and a complete RomFS. DLC RomFS goes to
-   `private/acnh/aoc/<index>/`.
+1. **Game folder.** The setup links your game folder's `exefs/`, `romfs/` and `aoc/` into the data folder, reads
+   main's build id to pick the version's hooks (`games/acnh/versions.txt`), and lays the three modules out as they
+   are loaded (`tools/nso2bin.py`) for the shader extraction.
 2. **CPU.** Each AArch64 function becomes a C++ function. Guest memory is host memory: the modules are mapped at
    fixed addresses (`0x40_0000_0000` on Linux), so a game pointer is a host pointer, with no translation or byte
    swapping. Branches inside a function become `goto`, jump tables become `switch`, and indirect calls go through a
    lookup table. ACNH 3.0.2 uses SDK 20.5, so the recompiler gained new instructions (`sqshl`, `sqrshl`, `uqshl`,
    `sli`, `sri`, `tbx`, byte `pmull`, and others), each validated against Unicorn, and RELR relocations support.
-3. **SDK and system.** Nintendo's `sdk` module (libc, libc++, `nn::os`, `nn::fs`, ...) is recompiled too, because
+3. **SDK and system.** The SDK module (`sdk`) (libc, libc++, `nn::os`, `nn::fs`, ...) is recompiled too, because
    `main` embeds its object layouts; `subsdk0` (`nn::movie`) is the third module. The runtime acts as the dynamic
    loader and a minimal Horizon kernel (threads, synchronization, memory, SVCs) and replaces `nn::*` functions by
    name (HLE): file system and saves in host folders, input through SDL3, the clock from the host, audio, and a
@@ -619,7 +599,7 @@ More detail: [docs/ACNH.md](docs/ACNH.md) (the game's modules, RomFS and shader 
 ## Credits and references
 
 - [SuperMarioWonderRecomp](https://github.com/BelmanteGu/SuperMarioWonderRecomp) (MIT): the base framework:
-  recompiler, runtime, NVN to Vulkan, importer and shader translation pipeline.
+  recompiler, runtime, NVN to Vulkan and shader translation pipeline.
 - [Ryujinx / Ryubing](https://codeberg.org/Software_arch/Ryubing) (MIT): the Maxwell shader translator, used
   offline.
 - [Dear ImGui](https://github.com/ocornut/imgui) (MIT): the settings screen.

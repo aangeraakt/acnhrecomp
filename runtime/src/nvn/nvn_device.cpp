@@ -1,8 +1,11 @@
 // NVN device (docs/NVN.md, phases N2-N3). Values come from what the game checks and from the SDK's own NVN driver
 // (recompiled in sdk; NX_NVN_REAL=1 records where each of its procs lives, see nvn_trace.cpp).
 #include <map>
+#include <mutex>
 
 #include <nx/runtime.h>
+
+#include "nvn.h"
 
 namespace nx {
 
@@ -115,8 +118,39 @@ const std::map<uint32_t, int32_t> kDeviceInfo = {
     {98, 0x0},  // provisional: the driver reads [dev+0xbc]
 };
 
+// The API version (pnames 0 and 1) is the game's own driver's: each SDK has its own and the game checks it (ACNH 2.0.7
+// wants major == 53 and minor >= 313 at main+26ef284, 3.0.2 and Wonder major 55). The driver's nvnDeviceGetInteger
+// (recompiled in sdk) answers it from constants, so it is asked once with a blank device; the table above stays the
+// fallback.
+bool driver_api_version(CPU& c, int32_t& major, int32_t& minor) {
+    static std::once_flag once;
+    static bool ok = false;
+    static int32_t v[2] = {};
+    std::call_once(once, [&] {
+        uint64_t real = nvn::real_proc(c, "nvnDeviceGetInteger");
+        if (!real) return;
+        uint64_t dev = kernel_alloc(0x4000), out = kernel_alloc(0x10);
+        for (int k = 0; k < 2; k++) {
+            st<int32_t>(out, -1);
+            nvn::guest_call(c, real, {dev, uint64_t(k), out});
+            v[k] = ld<int32_t>(out);
+        }
+        ok = v[0] >= 40 && v[0] < 100 && v[1] >= 0;
+        log("nvn: the game's driver reports API version %d.%d%s", v[0], v[1], ok ? "" : " (implausible: table used)");
+    });
+    major = v[0], minor = v[1];
+    return ok;
+}
+
 void nvnDeviceGetInteger(CPU& c) {
     uint32_t pname = uint32_t(c.x[1]);
+    if (pname <= 1 && c.x[2]) {
+        int32_t major = 0, minor = 0;
+        if (driver_api_version(c, major, minor)) {
+            st<int32_t>(c.x[2], pname == 0 ? major : minor);
+            return;
+        }
+    }
     auto it = kDeviceInfo.find(pname);
     if (it == kDeviceInfo.end()) log("nvn: nvnDeviceGetInteger(%u) unknown -> 0 (lr %s)", pname, describe(c.x[30]).c_str());
     if (c.x[2]) st<int32_t>(c.x[2], it == kDeviceInfo.end() ? 0 : it->second);

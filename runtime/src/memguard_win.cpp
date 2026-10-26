@@ -1,4 +1,4 @@
-// Memory guard (Windows), as memguard_mac.cpp: the process's private commit (PrivateUsage: the guest heap, host
+// Memory guard (Windows): the process's private commit (PrivateUsage: the guest heap, host
 // allocations and what the GPU driver commits for us; with an integrated GPU that includes its "video" memory) is
 // checked every 250 ms; past NX_MEM_LIMIT_GB (default 8) the process ends at once, so a leak can never push the
 // machine into swap (one reached 85 GB on the Mac). The footprint is logged every 30 s so growth shows early.

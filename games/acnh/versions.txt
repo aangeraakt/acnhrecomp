@@ -1,0 +1,11 @@
+# The versions of ACNH whose main the project knows, by build id (the first 16 bytes of main's ModuleId, NSO header
+# 0x40; tools/acnh_version.py prints it). Each line: build id, version, the hooks of main for that build (instructions
+# that call the runtime first: games/acnh/*.cpp, runtime/src/nvn/nvn_ultrawide.cpp, docs/NATIVE60.md), "-" for none.
+#
+# Any other version is imported, recompiled and built all the same, with no hooks: the fixes that sit at 3.0.2's
+# addresses (native 60 FPS, wider aspect ratios, the mouse pointer, the Phive guard, the clear-on-bind fix) stay off
+# and the game runs as dumped. docs/VERSIONS.md says how to port them to another build and add its line here.
+FCD2BB238ABE99E925B4E452DF1F41F1  3.0.2  games/acnh/hooks.txt
+0948E48778171EE6D5D7A65813ED5FCC  2.0.7  games/acnh/hooks-2.0.7.txt
+7FC1BAFF976AECA414520CB89F4616CB  1.0.0  games/acnh/hooks-1.0.0.txt
+FF1D1C05670DB6021C85B624A710B963  3.0.3  games/acnh/hooks-3.0.3.txt

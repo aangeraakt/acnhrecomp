@@ -1,10 +1,10 @@
 // The launcher's pages (launcher.h), in the settings screen's style (ui/theme.h).
 //
 //   welcome   two ways in: set up from the game files, or pick a build folder made before
-//   files     step 1: a card each for the keys, base game, update 3.0.2, DLC and the pt-BR translation: Browse…,
+//   files     step 1: a card each for the keys, base game, update (any version, optional), DLC and the pt-BR translation: Browse…,
 //             Search (the usual folders, results to pick from) or a file dropped on it; each file checked when chosen
 //   install   step 2: where the build goes, and what this computer has (with the command to install the rest)
-//   build     step 3: tools/setup_acnh.sh running: stages, progress, log, stop; the error state
+//   build     step 3: tools/setup_acnh.py running: stages, progress, log, stop; the error state
 //   done      step 4: Play
 //   home      later starts, with a valid build remembered: Play, Settings, Rebuild, Change build folder
 //   settings  a few of the game's config.ini settings (the rest is in the game, F1)
@@ -61,9 +61,7 @@ struct Item {
     std::string path;
     FileCheck check;
 };
-Item g_keys, g_title_keys, g_base, g_update, g_ptbr;
-std::vector<Item> g_dlc;
-bool g_keys_auto = false, g_title_keys_auto = false;  // found next to the other files, not chosen
+Item g_game, g_ptbr;
 std::string g_install;
 std::vector<Prereq> g_prereqs;
 Build g_build;
@@ -72,8 +70,8 @@ std::string g_banner;  // an error under the page title (a refused file or folde
 std::string g_toast;
 double g_toast_until = 0;
 
-// The files page's cards; a file dialog's target is its card (kPickKeys..kPickMod in the same order).
-enum Slot { kSlotKeys, kSlotBase, kSlotUpdate, kSlotDlc, kSlotMod, kSlotCount };
+// The files page's cards; a file dialog's target is its card (kPickGame, kPickMod in the same order).
+enum Slot { kSlotGame, kSlotMod, kSlotCount };
 struct SlotState {
     bool open = false;         // the search's results shown
     std::vector<Found> found;  // its results
@@ -85,7 +83,7 @@ ImVec2 g_drag_pos;
 ImVec2 g_page_min, g_page_max;  // the visible part of the page (it scrolls)
 
 // File dialogs answer on their own time (and maybe on another thread): queued here, applied in the frame.
-enum Target { kPickKeys, kPickBase, kPickUpdate, kPickDlc, kPickMod, kPickInstall, kPickBuild };
+enum Target { kPickGame, kPickMod, kPickInstall, kPickBuild };
 struct Picked {
     int target;
     std::vector<std::string> paths;
@@ -113,13 +111,7 @@ void toast(const std::string& t) {
 
 void save_files() {
     Ini& s = settings();
-    s.set("files.keys", g_keys_auto ? "" : g_keys.path);
-    s.set("files.title_keys", g_title_keys_auto ? "" : g_title_keys.path);
-    s.set("files.base", g_base.path);
-    s.set("files.update", g_update.path);
-    std::string dlc;
-    for (const Item& d : g_dlc) dlc += (dlc.empty() ? "" : "|") + d.path;
-    s.set("files.dlc", dlc);
+    s.set("files.game", g_game.path);
     s.set("files.ptbr", g_ptbr.path);
     s.set("launcher.install", g_install);
     s.save();
@@ -130,26 +122,10 @@ void set_item(Item& it, Kind kind, const std::string& path) {
     it.check = check_file(kind, path);
 }
 
-void refresh_keys_auto() {
-    if (g_keys.path.empty() || g_keys_auto) {
-        std::string k = find_keys({g_base.path, g_update.path});
-        g_keys_auto = !k.empty();
-        set_item(g_keys, Kind::Keys, k);
-    }
-    if (g_title_keys.path.empty() || g_title_keys_auto) {  // title.keys next to prod.keys
-        std::string t = title_keys_for(g_keys.path);
-        g_title_keys_auto = !t.empty();
-        set_item(g_title_keys, Kind::TitleKeys, t);
-    }
-}
-
 // The checks again (their texts are translated).
 void recheck_files() {
-    const std::pair<Item*, Kind> items[] = {{&g_keys, Kind::Keys}, {&g_title_keys, Kind::TitleKeys},
-                                            {&g_base, Kind::Base}, {&g_update, Kind::Update}, {&g_ptbr, Kind::Mod}};
-    for (const auto& [it, kind] : items)
-        if (!it->path.empty()) it->check = check_file(kind, it->path);
-    for (Item& d : g_dlc) d.check = check_file(Kind::Dlc, d.path);
+    if (!g_game.path.empty()) g_game.check = check_file(Kind::Game, g_game.path);
+    if (!g_ptbr.path.empty()) g_ptbr.check = check_file(Kind::Mod, g_ptbr.path);
     for (SlotState& s : g_slot)
         for (Found& f : s.found) f.check = check_file(f.kind, f.path);
 }
@@ -176,9 +152,6 @@ void SDLCALL on_picked(void* user, const char* const* list, int) {
 }
 
 void pick(Target t) {
-    static const SDL_DialogFileFilter dumps[] = {{"Switch game (NSP, XCI)", "nsp;xci"}, {"*", "*"}};
-    static const SDL_DialogFileFilter nsp[] = {{"NSP", "nsp"}, {"*", "*"}};
-    static const SDL_DialogFileFilter keys[] = {{"prod.keys, title.keys", "keys;txt"}, {"*", "*"}};
     static const SDL_DialogFileFilter zip[] = {{"ZIP", "zip"}, {"*", "*"}};
     // The folder of the last file chosen, else Downloads.
     static std::string last;
@@ -188,10 +161,7 @@ void pick(Target t) {
     const char* where = is_dir(last) ? last.c_str() : nullptr;
     void* user = reinterpret_cast<void*>(intptr_t(t));
     switch (t) {
-        case kPickKeys: SDL_ShowOpenFileDialog(on_picked, user, g_window, keys, 2, where, true); break;
-        case kPickBase: SDL_ShowOpenFileDialog(on_picked, user, g_window, dumps, 2, where, false); break;
-        case kPickUpdate: SDL_ShowOpenFileDialog(on_picked, user, g_window, nsp, 2, where, false); break;
-        case kPickDlc: SDL_ShowOpenFileDialog(on_picked, user, g_window, nsp, 2, where, true); break;
+        case kPickGame: SDL_ShowOpenFolderDialog(on_picked, user, g_window, where, false); break;
         case kPickMod: SDL_ShowOpenFileDialog(on_picked, user, g_window, zip, 2, where, false); break;
         case kPickInstall:
             SDL_ShowOpenFolderDialog(on_picked, user, g_window, is_dir(g_install) ? g_install.c_str() : nullptr, false);
@@ -200,40 +170,15 @@ void pick(Target t) {
     }
 }
 
-void add_dlc(const std::string& path) {
-    for (const Item& d : g_dlc)
-        if (d.path == path) return;
-    Item it;
-    set_item(it, Kind::Dlc, path);
-    g_dlc.push_back(it);
-}
-
-// A file chosen for `kind`, by a dialog, a search result or a drop.
+// A game folder or package chosen for `kind`, by a dialog, a search result or a drop.
 void use_file(Kind kind, const std::string& path) {
-    switch (kind) {
-        case Kind::Keys: set_item(g_keys, kind, path), g_keys_auto = false; break;
-        case Kind::TitleKeys: set_item(g_title_keys, kind, path), g_title_keys_auto = false; break;
-        case Kind::Base: set_item(g_base, kind, path); break;
-        case Kind::Update: set_item(g_update, kind, path); break;
-        case Kind::Dlc: add_dlc(path); break;
-        case Kind::Mod: set_item(g_ptbr, kind, path); break;
-    }
+    set_item(kind == Kind::Game ? g_game : g_ptbr, kind, path);
     settings().set("files.last_dir", parent_dir(path));
-    refresh_keys_auto();
     save_files();
 }
 
-// What a file given to a card is: the card's kind (a wrong file then shows why), title.keys on the keys card.
-Kind slot_kind(int slot, const std::string& path) {
-    Kind k;
-    switch (slot) {
-        case kSlotKeys: return classify_file(path, k) && k == Kind::TitleKeys ? Kind::TitleKeys : Kind::Keys;
-        case kSlotBase: return Kind::Base;
-        case kSlotUpdate: return Kind::Update;
-        case kSlotDlc: return Kind::Dlc;
-        default: return Kind::Mod;
-    }
-}
+// What a file or folder given to a card is: the card's kind (a wrong one then shows why).
+Kind slot_kind(int slot, const std::string&) { return slot == kSlotGame ? Kind::Game : Kind::Mod; }
 
 int slot_at(ImVec2 p) {
     if (g_page != Page::Files) return -1;
@@ -244,18 +189,11 @@ int slot_at(ImVec2 p) {
     return -1;
 }
 
-// Search: the files that look right for the card in the usual folders and near the files chosen so far.
+// Search: the game folders (or packages) in the usual folders and near what was chosen so far.
 void search(int slot) {
-    std::vector<std::string> near = {settings().get("files.last_dir"), g_keys.path, g_base.path, g_update.path,
-                                     g_ptbr.path};
-    for (const Item& d : g_dlc) near.push_back(d.path);
+    std::vector<std::string> near = {settings().get("files.last_dir"), g_game.path, g_ptbr.path};
     SlotState& s = g_slot[slot];
-    const Kind kinds[] = {Kind::Keys, Kind::Base, Kind::Update, Kind::Dlc, Kind::Mod};
-    s.found = search_files(kinds[slot], near);
-    if (slot == kSlotKeys) {
-        std::vector<Found> t = search_files(Kind::TitleKeys, near);
-        s.found.insert(s.found.end(), t.begin(), t.end());
-    }
+    s.found = search_files(slot == kSlotGame ? Kind::Game : Kind::Mod, near);
     s.open = true;
 }
 
@@ -284,8 +222,8 @@ void apply_picks() {
         switch (p.target) {
             case kPickInstall: g_install = first, g_prereqs = check_prerequisites(g_install); break;
             case kPickBuild: use_build_folder(first); break;
-            default:  // a card: several files for the keys (prod.keys and title.keys) and the DLC
-                for (const std::string& f : p.paths) use_file(slot_kind(p.target, f), f);
+            default:  // a card
+                use_file(slot_kind(p.target, first), first);
         }
         save_files();
     }
@@ -540,7 +478,6 @@ bool card(const char* id, const Card& c, ImVec2 size) {
 
 void go_files() {
     g_banner.clear();
-    refresh_keys_auto();
     g_page = Page::Files;
 }
 
@@ -648,13 +585,7 @@ bool file_row(const char* id, const Item& it, bool auto_found, const char* empty
     return cleared;
 }
 
-bool chosen(const std::string& path) {
-    for (const Item* it : {&g_keys, &g_title_keys, &g_base, &g_update, &g_ptbr})
-        if (it->path == path) return true;
-    for (const Item& d : g_dlc)
-        if (d.path == path) return true;
-    return false;
-}
+bool chosen(const std::string& path) { return path == g_game.path || path == g_ptbr.path; }
 
 // The search's results under a card, `w` wide: name, size and folder, the check, and Use (Add for the DLC).
 void found_list(int slot, float w) {
@@ -680,7 +611,7 @@ void found_list(int slot, float w) {
     ImGui::PopTextWrapPos();
     ImGui::SameLine(x0 + iw - hw);
     if (button(hide, kWhite, true, hw)) s.open = false;
-    const char* use = tr(slot == kSlotDlc ? "launcher.add_one" : "launcher.use");
+    const char* use = tr("launcher.use");
     const char* in_use = tr("launcher.in_use");
     const float uw = std::max(ImGui::CalcTextSize(use).x, ImGui::CalcTextSize(in_use).x) + S(28);
     for (size_t k = 0; k < s.found.size(); k++) {
@@ -695,7 +626,7 @@ void found_list(int slot, float w) {
         ImGui::BeginGroup();
         ImGui::PushTextWrapPos(x0 + iw - uw - S(10));
         ImGui::TextWrapped("%s", file_name(f.path).c_str());
-        text_small((human_size(f.size) + "   ·   " + short_dir(f.path)).c_str());
+        text_small((f.size ? human_size(f.size) + "   ·   " + short_dir(f.path) : short_dir(f.path)).c_str());
         text_small(f.check.text.c_str(), status_ink(f.check.status));
         ImGui::PopTextWrapPos();
         ImGui::EndGroup();
@@ -704,7 +635,7 @@ void found_list(int slot, float w) {
         bool taken = chosen(f.path);
         if (button(taken ? in_use : use, taken ? kWhite : kMint, !taken, uw)) {
             use_file(f.kind, f.path);
-            if (slot != kSlotDlc) s.open = false;
+            s.open = false;
         }
         ImGui::PopID();
     }
@@ -820,13 +751,8 @@ Status combined(std::initializer_list<const Item*> items) {
 }
 
 bool files_ready() {
-    for (const Item* it : {&g_keys, &g_base, &g_update})
-        if (it->path.empty() || it->check.status == Status::Error) return false;
-    for (const Item* it : {&g_title_keys, &g_ptbr})
-        if (!it->path.empty() && it->check.status == Status::Error) return false;
-    for (const Item& d : g_dlc)
-        if (d.check.status == Status::Error) return false;
-    return true;
+    if (g_game.path.empty() || g_game.check.status == Status::Error) return false;
+    return g_ptbr.path.empty() || g_ptbr.check.status != Status::Error;
 }
 
 void page_files() {
@@ -834,50 +760,26 @@ void page_files() {
     heading(tr("launcher.files.title"), tr("launcher.files.text"));
     g_page_min = ImGui::GetWindowPos();
     g_page_max = ImVec2(g_page_min.x + ImGui::GetWindowSize().x, g_page_min.y + ImGui::GetWindowSize().y);
-    const char* missing = tr("launcher.status.missing_drop");
-    file_card({"##keys", kSlotKeys, nx::ui::kIconKey, tr("launcher.item.keys"), tr("launcher.item.keys.desc"), true},
-              combined({&g_keys, &g_title_keys}), [&](float w) {
-                  if (file_row("prod", g_keys, g_keys_auto, missing, true, w)) {
-                      g_keys = Item(), g_keys_auto = false;
-                      save_files();
-                  }
-                  if (file_row("title", g_title_keys, g_title_keys_auto, tr("launcher.status.title_keys_none"), false, w)) {
-                      g_title_keys = Item(), g_title_keys_auto = false;
-                      save_files();
-                  }
-              });
-    auto single = [&](const char* id, int slot, int icon, const char* title, const char* desc, bool required, Item& it) {
+    auto single = [&](const char* id, int slot, int icon, const char* title, const char* desc, bool required,
+                      const char* empty, Item& it) {
         file_card({id, slot, icon, title, desc, required}, combined({&it}), [&](float w) {
-            if (file_row("file", it, false, required ? missing : tr("launcher.status.none_drop"), required, w)) {
+            if (file_row("file", it, false, empty, required, w)) {
                 it = Item();
                 save_files();
             }
         });
     };
-    single("##base", kSlotBase, nx::ui::kIconLeaf, tr("launcher.item.base"), tr("launcher.item.base.desc"), true, g_base);
-    single("##update", kSlotUpdate, nx::ui::kIconHouse, tr("launcher.item.update"), tr("launcher.item.update.desc"), true,
-           g_update);
-    Status dlc_st = Status::Empty;
-    for (const Item& d : g_dlc) dlc_st = std::max(dlc_st, d.check.status);
-    file_card({"##dlc", kSlotDlc, nx::ui::kIconBox, tr("launcher.item.dlc"), tr("launcher.item.dlc.desc"), false}, dlc_st,
-              [&](float w) {
-                  if (g_dlc.empty()) file_row("none", Item(), false, tr("launcher.status.dlc_none"), false, w);
-                  size_t remove = g_dlc.size();
-                  for (size_t k = 0; k < g_dlc.size(); k++)
-                      if (file_row(std::to_string(k).c_str(), g_dlc[k], false, "", false, w)) remove = k;
-                  if (remove < g_dlc.size()) {
-                      g_dlc.erase(g_dlc.begin() + long(remove));
-                      save_files();
-                  }
-              });
-    single("##ptbr", kSlotMod, nx::ui::kIconText, tr("launcher.item.ptbr"), tr("launcher.item.ptbr.desc"), false, g_ptbr);
+    single("##game", kSlotGame, nx::ui::kIconLeaf, tr("launcher.item.game"), tr("launcher.item.game.desc"), true,
+           tr("launcher.status.game_missing"), g_game);
+    single("##ptbr", kSlotMod, nx::ui::kIconText, tr("launcher.item.ptbr"), tr("launcher.item.ptbr.desc"), false,
+           tr("launcher.status.none_drop"), g_ptbr);
 }
 
 void footer_files() {
     if (button(tr("common.back"), kWhite)) g_banner.clear(), g_page = Page::Welcome;
     bool ready = files_ready();
     if (!ready) {  // why Next is off, when it fits beside it (the cards show it too)
-        bool all = !g_keys.path.empty() && !g_base.path.empty() && !g_update.path.empty();
+        bool all = !g_game.path.empty();
         const char* why = tr(all ? "launcher.files.fix_errors" : "launcher.files.missing_required");
         ImGui::SameLine();
         float room = ImGui::GetContentRegionAvail().x - button_width(tr("launcher.next")) - ImGui::GetStyle().ItemSpacing.x;
@@ -986,14 +888,9 @@ void page_install() {
 void start_setup(bool rebuild) {
     SetupArgs a;
     a.install_dir = rebuild ? g_build.data : g_install;
-    auto keep = [](const Item& it) { return is_file(it.path) ? it.path : std::string(); };
-    a.keys = keep(g_keys);
-    a.title_keys = keep(g_title_keys);
-    a.base = keep(g_base);
-    a.update = keep(g_update);
-    for (const Item& d : g_dlc)
-        if (is_file(d.path)) a.dlc.push_back(d.path);
-    a.ptbr_zip = keep(g_ptbr);
+    // A rebuild keeps the game folder the install folder links to; a new setup links the chosen one.
+    if (!rebuild && is_dir(g_game.path)) a.game = g_game.path;
+    a.ptbr_zip = is_file(g_ptbr.path) ? g_ptbr.path : std::string();
     std::string err;
     g_log.clear();
     g_rebuild = rebuild;
@@ -1019,7 +916,7 @@ void footer_install() {
 // ---- build ----------------------------------------------------------------------------------------------------
 
 const char* stage_label(int s) {
-    static const char* keys[] = {"launcher.stage.tools",   "launcher.stage.import", "launcher.stage.mods",
+    static const char* keys[] = {"launcher.stage.tools",   "launcher.stage.game",   "launcher.stage.mods",
                                  "launcher.stage.recompile", "launcher.stage.shaders", "launcher.stage.fonts",
                                  "launcher.stage.build"};
     return s >= 0 && s < kStageCount ? tr(keys[s]) : tr("launcher.stage.prepare");
@@ -1171,18 +1068,64 @@ void footer_build() {
 
 // ---- done and home --------------------------------------------------------------------------------------------
 
+// Set by play(): the launcher stays up, saying so, until the game's window is there to take its place.
+double g_opening_since = -1;
+
 void play() {
+    if (g_opening_since >= 0) return;  // already starting
     std::string err;
-    if (launch_game(g_build, err))
-        g_exit = true;
+    if (launch_game(g_build, err, g_window))
+        g_opening_since = ImGui::GetTime(), start_sound_play();
     else
         g_banner = trf("launcher.launch_failed", err);
+}
+
+// The window of the game that play() started opens over this one when its first picture is ready (it is made hidden
+// till then, platform_sdl.cpp), and the launcher goes. Its boot screen is black with a small mark at the bottom right,
+// so this screen fades to the same black and waits with its own mark there: the game's takes its place. Where the
+// game's window cannot be seen (not Windows), after a few seconds.
+void opening_overlay() {
+    if (g_opening_since < 0) return;
+    double t = ImGui::GetTime() - g_opening_since;
+#if defined(_WIN32)
+    const double kGiveUp = 90;  // the game shows its window after a minute at most
+#else
+    const double kGiveUp = 3;
+#endif
+    // Once the game's window is there the launcher's hides, and goes when its sound logo has played out.
+    static bool hidden = false;
+    if (!hidden && (game_window_shown() || t > kGiveUp)) SDL_HideWindow(g_window), hidden = true;
+    if (hidden && !start_sound_playing()) g_exit = true;
+    auto out_quart = [](double x) { return float(1 - std::pow(1 - std::clamp(x, 0.0, 1.0), 4.0)); };
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    ImVec2 size = ImGui::GetIO().DisplaySize;
+    // The page dims to black (0.55 s, decelerating): the card's colours sink first, as a lamp turned down.
+    float dim = out_quart(t / 0.55);
+    dl->AddRectFilled(ImVec2(0, 0), size, IM_COL32(0, 0, 0, int(255 * dim)));
+    // The mark: a ring turning, where the game's own will be (its centre at 92 % x 87.5 % of a 16:9 picture).
+    float a = out_quart((t - 0.35) / 0.4);
+    if (a <= 0) return;
+    float pw = std::min(size.x, size.y * 16.0f / 9.0f), ph = pw * 9.0f / 16.0f;
+    ImVec2 c((size.x - pw) * 0.5f + pw * 0.92f, (size.y - ph) * 0.5f + ph * 0.875f + (1 - a) * S(6));
+    float r = ph * 0.03f, th = std::max(2.0f, r * 0.22f);
+    dl->AddCircle(c, r, IM_COL32(255, 249, 232, int(40 * a)), 48, th);
+    float spin = float(t * 4.2);  // radians per second: quick, so the wait feels short
+    dl->PathArcTo(c, r, spin, spin + 1.9f, 32);
+    dl->PathStroke(IM_COL32(118, 200, 170, int(255 * a)), 0, th);
+    const char* text = tr("launcher.opening");
+    float fs = font_size(g_body);
+    ImVec2 ts = g_body->CalcTextSizeA(fs, FLT_MAX, 0, text);
+    dl->AddText(g_body, fs, ImVec2(c.x - r - S(14) - ts.x, c.y - ts.y * 0.5f), IM_COL32(255, 249, 232, int(170 * a)), text);
 }
 
 bool big_button(const char* label, int icon, ImU32 color, float w, float h) {
     ImVec2 p = ImGui::GetCursorScreenPos();
     bool clicked = ImGui::InvisibleButton(label, ImVec2(w, h));
     bool hov = ImGui::IsItemHovered() || ImGui::IsItemFocused();
+    if (ImGui::IsItemActive()) {  // pressed: the button gives a little under the finger (3 %, from its centre)
+        float dx = w * 0.015f, dy = h * 0.015f;
+        p = ImVec2(p.x + dx, p.y + dy * 2), w -= dx * 2, h -= dy * 2;
+    }
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->AddRectFilled(ImVec2(p.x, p.y + S(4)), ImVec2(p.x + w, p.y + h + S(4)), rgb(80, 140, 60, 120), h * 0.5f);
     dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), hov ? kYellow : color, h * 0.5f);
@@ -1279,6 +1222,141 @@ float action_height(const char* title, const char* desc, float w) {
     return std::max(2 * r, S(8) + measure(g_body, fs, title, inner).y + measure(g_body, fs * 0.82f, desc, inner).y) + 2 * pad;
 }
 
+// ---- what the build holds: its version and its add-on content ---------------------------------------------------
+
+bool g_addons_open = false;
+double g_addons_since = 0;
+
+const BuildContents& contents(bool refresh = false) {
+    static std::string for_data;
+    static BuildContents c;
+    if (refresh || for_data != g_build.data) for_data = g_build.data, c = build_contents(g_build.data);
+    return c;
+}
+
+std::string size_text(uint64_t bytes) {
+    char t[32];
+    if (bytes >= (1ull << 30)) std::snprintf(t, sizeof t, "%.1f GB", double(bytes) / double(1ull << 30));
+    else std::snprintf(t, sizeof t, "%.0f MB", std::max(1.0, double(bytes) / double(1ull << 20)));
+    return t;
+}
+
+float out_cubic(double x) { return float(1 - std::pow(1 - std::clamp(x, 0.0, 1.0), 3.0)); }
+
+// A pill: an icon in a coloured disc, then the text. A clickable one answers the pointer like the action cards and
+// gives a little under it; `dot` marks it live (a green dot on the disc).
+bool pill(const char* id, int icon, ImU32 color, const char* text, bool clickable, bool dot, float x) {
+    float h = S(38), r = S(13), pad = S(6), fs = font_size(g_body) * 0.9f;
+    ImVec2 ts = measure(g_body, fs, text, -1);
+    float w = pad + 2 * r + S(10) + ts.x + S(16);
+    ImGui::SetCursorScreenPos(ImVec2(x, ImGui::GetCursorScreenPos().y));
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    bool clicked = ImGui::InvisibleButton(id, ImVec2(w, h));
+    bool hov = clickable && (ImGui::IsItemHovered() || ImGui::IsItemFocused());
+    if (clickable && ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    if (clickable && ImGui::IsItemActive()) p = ImVec2(p.x + w * 0.015f, p.y + h * 0.03f), w *= 0.97f, h *= 0.94f;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImVec2 q(p.x + w, p.y + h);
+    dl->AddRectFilled(ImVec2(p.x, p.y + S(2)), ImVec2(q.x, q.y + S(2)), rgb(120, 90, 50, 22), h * 0.5f);
+    dl->AddRectFilled(p, q, hov ? rgb(255, 240, 196) : rgb(255, 252, 242), h * 0.5f);
+    dl->AddRect(p, q, hov ? rgb(246, 170, 40) : rgb(232, 220, 190), h * 0.5f, 0, hov ? S(2) : S(1));
+    ImVec2 c(p.x + pad + r, p.y + h * 0.5f);
+    dl->AddCircleFilled(c, r, color);
+    theme_icon(dl, icon, c, r * 0.62f, kWhite);
+    if (dot) {
+        ImVec2 d(c.x + r * 0.72f, c.y - r * 0.72f);
+        dl->AddCircleFilled(d, S(5), rgb(255, 252, 242));
+        dl->AddCircleFilled(d, S(3.5f), kGreen);
+    }
+    dl->AddText(g_body, fs, ImVec2(c.x + r + S(10), p.y + (h - ts.y) * 0.5f), kInk, text);
+    return clicked && clickable;
+}
+
+float pill_width(const char* text) {
+    float r = S(13), fs = font_size(g_body) * 0.9f;
+    return S(6) + 2 * r + S(10) + measure(g_body, fs, text, -1).x + S(16);
+}
+
+// Version and add-ons, side by side under the title (one under the other when they do not fit).
+void contents_row() {
+    const BuildContents& c = contents();
+    std::string ver = c.version.empty() ? tr("launcher.home.version_unknown") : trf("launcher.home.version", c.version);
+    std::string add = c.addons.empty() ? tr("launcher.addons.none")
+                                       : trf("launcher.addons.count", std::to_string(c.addons.size()));
+    float avail = ImGui::GetContentRegionAvail().x, gap = S(10), x0 = ImGui::GetCursorScreenPos().x;
+    float w1 = pill_width(ver.c_str()), w2 = pill_width(add.c_str());
+    bool stack = w1 + gap + w2 > avail;
+    float y = ImGui::GetCursorScreenPos().y;
+    pill("##version", nx::ui::kIconLeaf, kMint, ver.c_str(), false, false,
+         x0 + std::floor((avail - (stack ? w1 : w1 + gap + w2)) * 0.5f));
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", g_build.data.c_str());
+    if (!stack) ImGui::SetCursorScreenPos(ImVec2(x0, y));
+    float x2 = std::floor(stack ? x0 + (avail - w2) * 0.5f : x0 + (avail - w1 - gap - w2) * 0.5f + w1 + gap);
+    if (pill("##addons", nx::ui::kIconBox, c.addons.empty() ? kGrey : kPurple, add.c_str(), true, !c.addons.empty(), x2)) {
+        contents(true);  // read again: the setup may have added some since
+        g_addons_open = true, g_addons_since = ImGui::GetTime();
+    }
+    ImGui::SetCursorScreenPos(ImVec2(x0, ImGui::GetCursorScreenPos().y));
+}
+
+// The add-on content, one card each: its number, size and files, and that the game loads it.
+void addons_popup() {
+    if (g_addons_open) ImGui::OpenPopup("addons");
+    // Fades in (180 ms, decelerating), right after the pill was pressed.
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, out_cubic((ImGui::GetTime() - g_addons_since) / 0.18));
+    ImGui::SetNextWindowSize(ImVec2(std::min(ImGui::GetIO().DisplaySize.x * 0.9f, S(520)), 0));
+    if (ImGui::BeginPopupModal("addons", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize)) {
+        const BuildContents& c = contents();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        float r = S(18);
+        dl->AddCircleFilled(ImVec2(p.x + r, p.y + r), r, c.addons.empty() ? kGrey : kPurple);
+        theme_icon(dl, nx::ui::kIconBox, ImVec2(p.x + r, p.y + r), r * 0.6f, kWhite);
+        float fs = font_size(g_title) * 0.8f;
+        dl->AddText(g_title, fs, ImVec2(p.x + 2 * r + S(12), p.y + r - fs * 0.6f), kInk, tr("launcher.addons.title"));
+        ImGui::Dummy(ImVec2(0, 2 * r + S(12)));
+        if (c.addons.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, col4(kInkSoft));
+            ImGui::TextWrapped("%s", tr("launcher.addons.empty"));
+            ImGui::PopStyleColor();
+        }
+        for (size_t k = 0; k < c.addons.size(); k++) {
+            const AddOn& o = c.addons[k];
+            float w = ImGui::GetContentRegionAvail().x, h = S(58);
+            ImVec2 q = ImGui::GetCursorScreenPos();
+            // The cards settle into place one after the other (40 ms apart, 6 px).
+            float e = out_cubic((ImGui::GetTime() - g_addons_since - 0.04 * double(k)) / 0.22);
+            q.y += (1 - e) * S(6);
+            dl->AddRectFilled(q, ImVec2(q.x + w, q.y + h), rgb(255, 252, 242, int(255 * e)), S(16));
+            dl->AddRect(q, ImVec2(q.x + w, q.y + h), rgb(232, 220, 190, int(255 * e)), S(16), 0, S(1));
+            float cr = S(15);
+            ImVec2 cc(q.x + S(14) + cr, q.y + h * 0.5f);
+            dl->AddCircleFilled(cc, cr, kPurple);
+            theme_icon(dl, nx::ui::kIconBox, cc, cr * 0.6f, kWhite);
+            std::string title = trf("launcher.addons.item", std::to_string(o.index));
+            std::string sub = size_text(o.bytes) + "  \xC2\xB7  " + trf("launcher.addons.files", std::to_string(o.files));
+            float bfs = font_size(g_body);
+            dl->AddText(g_body, bfs, ImVec2(cc.x + cr + S(12), q.y + S(9)), kInk, title.c_str());
+            dl->AddText(g_body, bfs * 0.8f, ImVec2(cc.x + cr + S(12), q.y + S(9) + bfs * 1.15f), kInkSoft, sub.c_str());
+            // Loaded: a green check and the word, at the right.
+            const char* ok = tr("launcher.addons.loaded");
+            ImVec2 os = measure(g_body, bfs * 0.85f, ok, -1);
+            float ox = q.x + w - S(14) - os.x;
+            dl->AddText(g_body, bfs * 0.85f, ImVec2(ox, q.y + (h - os.y) * 0.5f), rgb(70, 140, 60), ok);
+            ImVec2 kc(ox - S(16), q.y + h * 0.5f);
+            dl->AddCircleFilled(kc, S(10), kGreen);
+            theme_icon(dl, nx::ui::kIconCheck, kc, S(6), kWhite);
+            ImGui::Dummy(ImVec2(w, h + S(8)));
+        }
+        ImGui::Dummy(ImVec2(0, S(4)));
+        align_right({tr("launcher.addons.close")});
+        if (button(tr("launcher.addons.close"), kWhite) || ImGui::IsKeyPressed(ImGuiKey_Escape))
+            g_addons_open = false, ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleVar();
+}
+
 void page_home() {
     const bool valid = *g_build_problem == 0;
     if (!valid) {
@@ -1291,8 +1369,9 @@ void page_home() {
     if (valid) {
         hero(nx::ui::kIconHouse, kGreen, S(46));
         centered(tr("launcher.home.title"), g_title, 1.1f, kInk);
-        centered(trf("launcher.home.build", g_build.data).c_str(), g_body, 0.84f, kInkSoft);
-        ImGui::Dummy(ImVec2(0, S(14)));
+        ImGui::Dummy(ImVec2(0, S(6)));
+        contents_row();
+        ImGui::Dummy(ImVec2(0, S(16)));
         play_block();
     }
     // Settings, Rebuild, Change build folder.
@@ -1433,6 +1512,7 @@ void popups() {
         ImGui::EndPopup();
     }
     if (g_quit_after_stop && !setup_state().running) g_exit = true;
+    addons_popup();
 }
 
 }  // namespace
@@ -1443,23 +1523,8 @@ void pages_init(SDL_Window* window) {
     g_window = window;
     Ini& s = settings();
     g_install = s.get("launcher.install", default_install_dir());
-    auto load = [](Item& it, Kind kind, const std::string& path) {
-        if (is_file(path)) set_item(it, kind, path);
-    };
-    load(g_keys, Kind::Keys, s.get("files.keys"));
-    load(g_title_keys, Kind::TitleKeys, s.get("files.title_keys"));
-    load(g_base, Kind::Base, s.get("files.base"));
-    load(g_update, Kind::Update, s.get("files.update"));
-    load(g_ptbr, Kind::Mod, s.get("files.ptbr"));
-    std::string dlc = s.get("files.dlc");
-    for (size_t a = 0; a < dlc.size();) {
-        size_t b = dlc.find('|', a);
-        std::string d = dlc.substr(a, b == std::string::npos ? std::string::npos : b - a);
-        if (is_file(d)) add_dlc(d);
-        if (b == std::string::npos) break;
-        a = b + 1;
-    }
-    refresh_keys_auto();
+    if (std::string g = s.get("files.game"); is_dir(g)) set_item(g_game, Kind::Game, g);
+    if (std::string z = s.get("files.ptbr"); is_file(z)) set_item(g_ptbr, Kind::Mod, z);
     std::string build = s.get("launcher.build");
     if (!build.empty()) {
         set_build(build, false);
@@ -1468,7 +1533,7 @@ void pages_init(SDL_Window* window) {
     }
     // Tests: a card's search shown, a page directly (main.cpp).
     if (const char* q = std::getenv("NX_LAUNCHER_SEARCH")) {
-        const char* names[] = {"keys", "base", "update", "dlc", "ptbr"};
+        const char* names[] = {"game", "ptbr"};
         for (int k = 0; k < kSlotCount; k++)
             if (std::strcmp(q, names[k]) == 0) search(k);
     }
@@ -1480,6 +1545,7 @@ void pages_init(SDL_Window* window) {
         if (n == "build") start_setup(false);
         if (n == "done") g_page = Page::Done;
         if (n == "home") g_page = Page::Home;
+        if (n == "addons") g_page = Page::Home, g_addons_open = true, g_addons_since = -1;  // the add-on panel open
         if (n == "settings") g_page = Page::Settings;
     }
 }
@@ -1487,16 +1553,14 @@ void pages_init(SDL_Window* window) {
 void pages_drop(const std::string& path, float x, float y) {
     g_dragging = false;
     if (g_page == Page::Build) return;
-    if (is_dir(path)) {
-        if (g_page == Page::Welcome || g_page == Page::Home) use_build_folder(path);
-        return;
-    }
-    // On a card it is that card's file; elsewhere it goes where it looks like it belongs.
+    // On a card it is that card's; elsewhere it goes where it looks like it belongs: a game folder to the files page,
+    // another folder is taken for a build folder (welcome and home).
     int slot = slot_at(ImVec2(x, y));
     Kind k;
     if (slot >= 0) {
         k = slot_kind(slot, path);
     } else if (!classify_file(path, k)) {
+        if (is_dir(path) && (g_page == Page::Welcome || g_page == Page::Home)) return use_build_folder(path);
         g_banner = trf("launcher.err.drop", file_name(path));
         return;
     }
@@ -1517,7 +1581,7 @@ void pages_close_requested() {
         g_exit = true;
 }
 
-bool pages_busy() { return setup_state().running || ImGui::GetTime() < g_toast_until; }
+bool pages_busy() { return setup_state().running || ImGui::GetTime() < g_toast_until || g_opening_since >= 0; }
 
 bool pages_draw(float scale, ImFont* title) {
     g_scale = scale, g_title = title, g_body = ImGui::GetFont();
@@ -1544,13 +1608,15 @@ bool pages_draw(float scale, ImFont* title) {
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
     ImGui::BeginChild("##page", ImVec2(0, -footer), ImGuiChildFlags_None);
     ImGui::PopStyleColor();
-    // The short pages sit in the middle of the card: their height from the last frame.
+    // The short pages sit in the middle of the card: their height from the last frame. The offset is whole pixels:
+    // ImGui rounds item positions down, so a fractional start changed the measured height and the page bobbed by a
+    // pixel every frame.
     static float content_h[8] = {};
     const int pi = int(g_page);
     const bool center = g_page == Page::Welcome || g_page == Page::Done || g_page == Page::Home;
     const float avail_h = ImGui::GetContentRegionAvail().y, top = ImGui::GetCursorPosY();
     if (center && content_h[pi] > 0 && content_h[pi] < avail_h)
-        ImGui::SetCursorPosY(top + (avail_h - content_h[pi]) * 0.4f);
+        ImGui::SetCursorPosY(std::floor(top + (avail_h - content_h[pi]) * 0.4f));
     const float start = ImGui::GetCursorPosY();
     switch (g_page) {
         case Page::Welcome: page_welcome(); break;
@@ -1581,6 +1647,7 @@ bool pages_draw(float scale, ImFont* title) {
         case Page::Settings: footer_settings(); break;
     }
     popups();
+    opening_overlay();
     ImGui::End();
     return !g_exit;
 }

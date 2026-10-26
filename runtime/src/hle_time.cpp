@@ -35,12 +35,9 @@ std::tm local_tm(int64_t t) {
 
 long gmt_offset(const std::tm& tm, int64_t t) {
 #if defined(_WIN32)
-    (void)tm;
-    std::tm g{};
-    time_t tt = time_t(t);
-    gmtime_s(&g, &tt);
-    g.tm_isdst = -1;
-    return long(t - int64_t(mktime(&g)));
+    // The local calendar time read as UTC, minus the time: the offset in force at t, daylight saving included.
+    std::tm local = tm;
+    return long(int64_t(_mkgmtime(&local)) - t);
 #else
     (void)t;
     return tm.tm_gmtoff;

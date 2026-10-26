@@ -1,0 +1,7 @@
+# Instructions of main (1.0.0, build id 7FC1BAFF...) that call the runtime first (games/acnh/versions.txt, v1_0_0.cpp).
+# Recompile main after changing this list (tools/setup_acnh.py does when the file is newer than the generated code).
+19d0d80  # clear-on-bind (main+19d0c00): blr to nvnCommandBufferClearColor (v1_0_0.cpp, bind_clear)
+19d0dd4  # clear-on-bind (main+19d0c00): tail call to nvnCommandBufferClearDepthStencil
+14b8f34  # guiTouchManager::update (main+14b8e50) before its hit tests: window buttons kept reachable (pointer.cpp)
+1d95cf0  # focus manager input (main+1d95cf0): a click on a list item focuses it and presses A (pointer.cpp)
+1d98a70  # button handler input (main+1d98a70): a click while a message waits presses A (pointer.cpp)

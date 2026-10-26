@@ -45,9 +45,11 @@ void enable_groups(uint64_t node, int depth) {
 // the button it grabbed.
 std::atomic<uint64_t> g_gui_click_frame{0};
 
-// guiTouchManager::update, right before its hit tests (main+31c3f98, x24 = the manager).
-void gui_touch_update(CPU& c) {
-    uint64_t m = c.x[24];
+}  // namespace
+
+// guiTouchManager::update, right before its hit tests (3.0.2: main+31c3f98, x24 = the manager; 2.0.7: main+200eac4,
+// x19, games/acnh/v2_0_7.cpp).
+void acnh_gui_touch_update(uint64_t m) {
     if (!m) return;
     enable_groups(ld<uint64_t>(m + 0x2a8 + 8), 0);
     int n = ld<int32_t>(m + 4);
@@ -56,6 +58,10 @@ void gui_touch_update(CPU& c) {
         if (s && ld<uint8_t>(s + 7) && ld<uint64_t>(s + 0x30)) g_gui_click_frame = g_frame.load();
     }
 }
+
+namespace {
+
+void gui_touch_update(CPU& c) { acnh_gui_touch_update(c.x[24]); }
 
 // ---- focus managers -------------------------------------------------------------------------------------------
 
@@ -67,7 +73,8 @@ void gui_touch_update(CPU& c) {
 // centre, y up), +0x14b0 the players it is enabled for. Setting the focus as the game does (main+31017d0): the old
 // target is told it leaves, main+3c48b68 (manager, player, target, 0) moves it, the new target's vtable[0x18] runs and
 // the entry takes its position.
-constexpr uint64_t kSetFocus = 0x3c48b68;
+// 3.0.2's addresses; 2.0.7 passes its own (games/acnh/v2_0_7.cpp).
+uint64_t g_set_focus = 0x3c48b68;
 constexpr float kLayoutToScreen = 1280.0f / 1920.0f;
 // Screen pixels around an item that still count as on it: an item's rectangle is often its text alone (the
 // "Confirm." button: 13 high); a click near no item takes the nearest one this close.
@@ -119,7 +126,7 @@ void set_focus(CPU& c, uint64_t mgr, uint64_t entry, uint64_t target) {
         guest(c, ld<uint64_t>(ld<uint64_t>(d)), d, 1, ev);
         st<uint64_t>(entry + 0x10, 0);
     }
-    guest(c, kSetFocus, mgr, 0, target, 0);
+    guest(c, g_set_focus, mgr, 0, target, 0);
     guest(c, ld<uint64_t>(ld<uint64_t>(target) + 0x18), target);
     st<float>(entry + 4, ld<float>(target + 0x14a0));
     st<float>(entry + 8, ld<float>(target + 0x14a4));
@@ -243,13 +250,24 @@ void focus_input(CPU& c) {
 // object they call). The message window's page turner (class main+0x49fc8f0, its handlers on the buttons A and B
 // advance the text) is on only while a page is fully shown and waits, the ▼ under it. A click then (one no list item
 // took in two frames, anywhere on the screen) presses A; with no message waiting, a click in the world does nothing.
-constexpr uint64_t kPageTurner = 0x49fc8f0;
+uint64_t g_page_turner = 0x49fc8f0;
 
 void button_input(CPU& c) {
     uint64_t h = c.x[0];
     if (!h || (c.x[3] & 1) || !ld<uint8_t>(h + 0xbc)) return;
     uint64_t owner = ld<uint64_t>(h + 0x18 + 8);
-    if (!owner || ld<uint64_t>(owner) != kModuleBase + kPageTurner) return;
+    if (tracing() && owner && ld<uint64_t>(owner)) {  // which classes own the buttons that are on (porting the turner)
+        static std::atomic<uint64_t> seen[32];
+        uint64_t vt = ld<uint64_t>(owner);
+        bool known = false;
+        for (auto& s : seen) {
+            uint64_t v = s.load();
+            if (v == vt) { known = true; break; }
+            if (!v && s.compare_exchange_strong(v, vt)) break;
+        }
+        if (!known) log("acnh: a button handler is on, owner class %s", describe(vt).c_str());
+    }
+    if (!owner || ld<uint64_t>(owner) != kModuleBase + g_page_turner) return;
     uint64_t f = g_frame.load();
     if (!g_click.pending) {
         uint32_t x, y;
@@ -268,6 +286,16 @@ void button_input(CPU& c) {
 }
 
 }  // namespace
+
+// For 2.0.7 (games/acnh/v2_0_7.cpp): the same hooks at its own addresses.
+void acnh_focus_input(CPU& c, uint64_t set_focus) {
+    g_set_focus = set_focus;
+    focus_input(c);
+}
+void acnh_button_input(CPU& c, uint64_t page_turner) {
+    g_page_turner = page_turner;
+    button_input(c);
+}
 
 NX_HOOK(0x31c3f98, gui_touch_update);
 NX_HOOK(0x3c48c60, focus_input);

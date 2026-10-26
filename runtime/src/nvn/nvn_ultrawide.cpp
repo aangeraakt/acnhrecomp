@@ -114,6 +114,10 @@ Scale wanted(uint64_t present) {
     } else if (int rows = std::atoi(r.c_str()); rows > 0) {
         s = rows / native;
     }
+    // video.antialiasing / NX_AA supersampling: that many times the rows, scaled down again when presented.
+    std::string aa = setting("NX_AA", "video.antialiasing", "off");
+    if (aa == "ssaa15") s *= 1.5;
+    else if (aa == "ssaa2") s *= 2.0;
     s = std::clamp(s, 0.25, 2.0);  // 2: 2160 rows (4K)
     s = std::round(s * native) / native;
     return {float(s), float(k)};
@@ -392,6 +396,7 @@ void projection_update(CPU& c) {
 }
 }  // namespace
 NX_HOOK(0x37e5958, projection_update);
+NX_HOOK(0x37e5968, projection_update);  // 3.0.3 (games/acnh/hooks-3.0.3.txt): the same function 0x10 further
 
 // ---- UI projection -------------------------------------------------------------------------------------------------
 // sead::OrthoProjection (vtable main+0x4a65688; near +0x98, far +0x9c, top +0xa0, bottom +0xa4, left +0xa8, right
@@ -472,6 +477,7 @@ void ortho_update(CPU& c) {
 }
 }  // namespace
 NX_HOOK(0x37e5b5c, ortho_update);
+NX_HOOK(0x37e5b6c, ortho_update);  // 3.0.3 (games/acnh/hooks-3.0.3.txt): the same function 0x10 further
 
 bool uw_ortho_on() { return !ortho_off(); }
 
@@ -639,7 +645,11 @@ void pane_calculate(CPU& c) {
     auto it = g_panes.find(pane);
     if (k == 1.0f && it == g_panes.end()) return;  // nothing changed yet
     PaneFix& fix = it != g_panes.end() ? it->second : g_panes[pane];
-    const float kx = std::max(1.0f, k), ky = std::max(1.0f, 1.0f / k);
+    // Taller than 16:9 (16:10, 4:3): layouts keep the 16:9 height, in the middle. A root made taller sent what is
+    // anchored to its bottom edge out of place (the dialogue's "next" arrow under its box at 16:10), while the box,
+    // placed from the middle, stayed. Backgrounds still cover the whole target (below). NX_UW_TALL_EDGES=1: taller.
+    static const bool tall_edges = std::getenv("NX_UW_TALL_EDGES") && std::getenv("NX_UW_TALL_EDGES")[0] == '1';
+    const float kx = std::max(1.0f, k), ky = tall_edges ? std::max(1.0f, 1.0f / k) : 1.0f;
     if (root) {
         // The size the game gave it (followed), widened to the target when it is a screen layout.
         follow(pane, 0x50, fix.set, fix.base, nullptr);
@@ -706,6 +716,7 @@ void pane_calculate(CPU& c) {
         }
         return;
     }
+    const float ty = std::max(1.0f, 1.0f / k);  // backgrounds cover the whole target, however tall
     // A picture or window that covered the whole 16:9 layout last frame (its global matrix +0x70, layout units), under
     // no other such pane: scaled up about its middle to cover the target.
     follow(pane, 0x48, fix.set, fix.base, nullptr);
@@ -726,11 +737,11 @@ void pane_calculate(CPU& c) {
         // A band only when it is thin and at an edge (the cutscene bars, 342 rows), not a 600-row panel.
         if (wide && !tall && hh > H * 0.7f) wide = false;
         if (tall && !wide && hw > W * 0.7f) tall = false;
-        full = (wide && kx > 1.0f) || (tall && ky > 1.0f) || (wide && tall);
+        full = (wide && kx > 1.0f) || (tall && ty > 1.0f) || (wide && tall);
         // Already as large as the whole target on the axes that grew (the NookPhone's 2940x2272 frame around its
         // screen, a glow scaled up by its animation): scaling it moved its cut-out off the phone, a dark band beside it.
-        const float TW = r->second.base[0] * 0.5f * kx, TH = r->second.base[1] * 0.5f * ky;
-        if (full && (kx <= 1.0f || (mx - hw <= -TW && mx + hw >= TW)) && (ky <= 1.0f || (my - hh <= -TH && my + hh >= TH)))
+        const float TW = r->second.base[0] * 0.5f * kx, TH = r->second.base[1] * 0.5f * ty;
+        if (full && (kx <= 1.0f || (mx - hw <= -TW && mx + hw >= TW)) && (ty <= 1.0f || (my - hh <= -TH && my + hh >= TH)))
             full = false;
         static const bool trace = std::getenv("NX_UW_LAYOUT_TRACE") != nullptr;
         static std::set<uint64_t> traced;
@@ -764,8 +775,8 @@ void pane_calculate(CPU& c) {
         }
         dbg = f;
     }
-    const float cover = std::max(kx, ky) * dbg;
-    const float want[2] = {wide && tall ? cover : wide ? kx : 1.0f, wide && tall ? cover : tall ? ky : 1.0f};
+    const float cover = std::max(kx, ty) * dbg;
+    const float want[2] = {wide && tall ? cover : wide ? kx : 1.0f, wide && tall ? cover : tall ? ty : 1.0f};
     const float shift[2] = {-(want[0] - 1.0f) * fix.base[0] * cx, -(want[1] - 1.0f) * fix.base[1] * cy};  // middle kept
     follow(pane, 0x48, fix.set, fix.base, want);
     follow(pane, 0x30, fix.tset, fix.tbase, shift, true);

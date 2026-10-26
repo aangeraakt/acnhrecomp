@@ -56,7 +56,7 @@ had 6 such targets too.
 `tools/maxwell/yaz0.py` (with a small C decoder built on first use) handles Yaz0, including Yaz0 members nested in
 SARC archives.
 
-## Shaders (`tools/extract_shaders.sh`, `tools/maxwell/containers.py`)
+## Shaders (`tools/extract_shaders.py`, `tools/maxwell/containers.py`)
 
 | Where | Container chain | Notes |
 |---|---|---|

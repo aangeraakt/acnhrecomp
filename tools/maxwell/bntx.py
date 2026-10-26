@@ -6,7 +6,7 @@ Usage:
   python tools/maxwell/bntx.py <file> --extract <name> <outdir> [--index N]
   python tools/maxwell/bntx.py --survey <file|dir>...         block height and size formula over many files
 
-BNTX is how Nintendo games ship textures: the image data is already in the GPU's block-linear layout, so the game
+BNTX is how Switch games ship textures: the image data is already in the GPU's block-linear layout, so the game
 copies it into an NVN memory pool as is (docs/nvn/TILING.md). Layout (little endian, pointers are file offsets):
 
   0x00  "BNTX\\0\\0\\0\\0", u32 version, u16 BOM, u8 alignment log2, u8 address size, u32 file name,

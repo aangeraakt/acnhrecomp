@@ -95,7 +95,9 @@ void lookat_update(CPU& c) {
         for (int k = 0; k < n; k++) std::fprintf(o, "%llu ", a[k]), log("native60diag: watching %llx", a[k]);
         std::fprintf(o, "\n");
         std::fclose(o);
+#ifdef SIGTRAP
         std::raise(SIGTRAP);
+#endif
     }
 }
 

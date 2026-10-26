@@ -140,6 +140,17 @@ class Emitter(Sdk20Ops, ExtOps, VecLdSt, IntOps, FpOps, NeonOps, NeonWideOps):
         self.unhandled = collections.Counter()
         self.handled = 0
 
+    # Pickled for the spawned emitter workers on Windows (recomp/__main__.py): the disassembler is remade there.
+    def __getstate__(self):
+        state = dict(self.__dict__)
+        del state["cs"]
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self.cs = capstone.Cs(capstone.CS_ARCH_ARM64, capstone.CS_MODE_ARM)
+        self.cs.detail = True
+
     # ---- helpers ------------------------------------------------------------------------------------------
 
     def regop(self, i, o):

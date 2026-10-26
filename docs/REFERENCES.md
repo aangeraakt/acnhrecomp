@@ -21,7 +21,6 @@ do que cada um faz e do que foi aproveitado aqui.
   destiling block-linear; ASTC/BCn; pipelines com dynamic state e cache em disco; FSR 1.
 - **Shaders**: extraídos de BNSH/FSHA/BAHS/VFXB e traduzidos **offline** para SPIR-V com o tradutor do Ryujinx
   (MIT), chaveados pelo hash do bloco de código.
-- **Importer** (`nximport`): NSP/XCI, tickets, title keys, NCA, BKTR (patch do update) e sparse, sem hactool.
 
 Aproveitado: praticamente tudo. O ACNH é outro jogo first-party NVN com o mesmo formato de módulos, então o
 framework serve quase direto; o trabalho foi o que muda com o SDK 20 e com o motor do ACNH (veja `ACNH.md`).

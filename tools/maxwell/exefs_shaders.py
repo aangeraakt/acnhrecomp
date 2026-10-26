@@ -72,9 +72,11 @@ def main():
         sys.exit(__doc__.strip().splitlines()[-1])
     d = open(sys.argv[1], "rb").read()
     out = os.path.normpath(sys.argv[3])
-    repo_private = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "private"))
-    if not os.path.realpath(out).startswith(repo_private + os.sep):
-        sys.exit(f"refusing to write outside private/: {out}")
+    repo = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+    real = os.path.realpath(out)
+    # Game data may go to private/ or anywhere outside the repository (an install folder), never elsewhere in it.
+    if real.startswith(repo + os.sep) and not real.startswith(os.path.join(repo, "private") + os.sep):
+        sys.exit(f"refusing to write game data into the repository outside private/: {out}")
     known = set()  # blocks already extracted from RomFS containers (sibling directories)
     parent = os.path.dirname(os.path.abspath(out))
     for sub in os.listdir(parent) if os.path.isdir(parent) else []:

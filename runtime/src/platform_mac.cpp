@@ -283,6 +283,9 @@ void* create_window() {
 }
 
 void release_window(void*) {}
+// The window is shown from the start here (the launcher's hand-over, NX_WINDOW_RECT, is Windows only).
+void picture_shown() {}
+uint64_t wait_vblank() { return 0; }  // no display vblank to wait on here: hle_vi.cpp keeps its timed tick
 uint64_t window_generation() { return 1; }
 bool window_minimized() { return g_minimized; }
 
@@ -315,7 +318,7 @@ const InputOptions& input_options() {
     static uint64_t gen = 0;
     if (uint64_t g = nx::config_generation(); g != gen) {
         gen = g;
-        o.xbox_layout = nx::config_get("input.layout", "nintendo") == "xbox";
+        o.xbox_layout = nx::config_get("input.layout", "console") == "xbox";
         o.deadzone = std::clamp(nx::config_get_int("input.deadzone", 24), 5, 50) * 32767 / 100;
         o.rumble = nx::config_get_bool("input.rumble", true);
         for (int k = 0; k < 22; k++) {
@@ -347,7 +350,7 @@ static void sample_input() {
         pad = nullptr;
     }
     if (pad) {
-        // SDL names buttons by position (south/east/...). Nintendo layout: the game's A is the east button, as on a
+        // SDL names buttons by position (south/east/...). Console layout: the game's A is the east button, as on a
         // Switch controller. Xbox layout: A is the bottom one (confirm where Xbox and PlayStation players expect it).
         struct Map {
             SDL_GamepadButton b;
@@ -381,9 +384,31 @@ static void sample_input() {
     }
     // Keyboard: the bindings from config.ini (defaults laid out for ACNH: WASD left stick, IJKL camera, arrows
     // D-pad, Space A, Shift B, X X, F Y, Q/E L/R, Z/C ZL/ZR, Enter +, Esc -).
-    if (g_window && (SDL_GetWindowFlags(g_window) & SDL_WINDOW_INPUT_FOCUS)) {
+    // The keys also go to the game as a USB keyboard (hle_hid.cpp). While its text entry takes them, they type and
+    // only the arrows, Enter and Backspace stay on the pad (cursor, confirm, delete); otherwise a key that types
+    // drives the pad once held kTypeWaitMs, so the first letter typed in the text entry does not also press a button.
+    constexpr uint64_t kTypeWaitMs = 120;
+    static uint64_t down_since[SDL_SCANCODE_COUNT] = {};
+    uint8_t usb[32] = {};
+    uint64_t mods = 0;
+    const bool focused = g_window && (SDL_GetWindowFlags(g_window) & SDL_WINDOW_INPUT_FOCUS);
+    const bool typing = nx::plat::keyboard_typing();
+    if (focused && typing) {
         const bool* k = SDL_GetKeyboardState(nullptr);
-        auto key = [&](int i) { return k[opt.keys[i]]; };
+        if (k[SDL_SCANCODE_UP]) p.buttons |= kUp;
+        if (k[SDL_SCANCODE_DOWN]) p.buttons |= kDown;
+        if (k[SDL_SCANCODE_LEFT]) p.buttons |= kLeft;
+        if (k[SDL_SCANCODE_RIGHT]) p.buttons |= kRight;
+        if (k[SDL_SCANCODE_RETURN] || k[SDL_SCANCODE_KP_ENTER]) p.buttons |= kPlus;
+        if (k[SDL_SCANCODE_BACKSPACE]) p.buttons |= kB;
+    } else if (focused) {
+        const bool* k = SDL_GetKeyboardState(nullptr);
+        const uint64_t now = SDL_GetTicks();
+        auto key = [&](int i) {
+            int sc = opt.keys[i];
+            return k[sc] && (!nx::plat::key_types(sc) || nx::plat::keyboard_state_known() ||
+                             now - down_since[sc] >= kTypeWaitMs);
+        };
         if (key(2)) p.lx = -kStickMax;
         if (key(3)) p.lx = kStickMax;
         if (key(0)) p.ly = kStickMax;
@@ -397,9 +422,30 @@ static void sample_input() {
             if (key(8 + i)) p.buttons |= bits[i];
         if (k[SDL_SCANCODE_BACKSPACE] && opt.keys[17] == SDL_SCANCODE_ESCAPE) p.buttons |= kMinus;
     }
+    if (focused) {
+        const bool* k = SDL_GetKeyboardState(nullptr);
+        const uint64_t now = SDL_GetTicks();
+        for (int u = 4; u < 232; u++) {
+            if (!k[u]) {
+                down_since[u] = 0;
+                continue;
+            }
+            if (!down_since[u]) down_since[u] = now;
+            bool pad = typing && (u == SDL_SCANCODE_UP || u == SDL_SCANCODE_DOWN || u == SDL_SCANCODE_LEFT ||
+                                  u == SDL_SCANCODE_RIGHT || u == SDL_SCANCODE_RETURN || u == SDL_SCANCODE_KP_ENTER ||
+                                  u == SDL_SCANCODE_BACKSPACE);
+            if (!pad) usb[u / 8] |= uint8_t(1u << (u % 8));
+        }
+        // KeyboardModifier bits: Control 0, Shift 1, LeftAlt 2, RightAlt 3, Gui 4, CapsLock 8, ScrollLock 9, NumLock 10.
+        SDL_Keymod m = SDL_GetModState();
+        mods = (m & SDL_KMOD_CTRL ? 1u : 0u) | (m & SDL_KMOD_SHIFT ? 2u : 0u) | (m & SDL_KMOD_LALT ? 4u : 0u) |
+               (m & SDL_KMOD_RALT ? 8u : 0u) | (m & SDL_KMOD_GUI ? 16u : 0u) | (m & SDL_KMOD_CAPS ? 256u : 0u) |
+               (m & SDL_KMOD_SCROLL ? 512u : 0u) | (m & SDL_KMOD_NUM ? 1024u : 0u);
+    }
     // The settings screen takes the input while it is open (and watches for its Minus + Plus combo).
     bool ui = nx::ui::ui_pad(p.buttons, p.lx, p.ly);
-    if (ui) p = PadState{};
+    if (ui) p = PadState{}, std::memset(usb, 0, sizeof usb), mods = 0;
+    nx::plat::set_keyboard(mods, usb);
     // The mouse: its left button touches the console's screen where the picture is (the game's own touch support).
     if (g_window) {
         float mx = 0, my = 0;
@@ -450,11 +496,12 @@ std::string controller_kind() {
         case SDL_GAMEPAD_TYPE_PS3:
         case SDL_GAMEPAD_TYPE_PS4:
         case SDL_GAMEPAD_TYPE_PS5: return "playstation";
-        case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_PRO:
-        case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_LEFT:
-        case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_RIGHT:
-        case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_PAIR: return "switch";
-        default: return "generic";
+        default: {
+            // The console's own pads, by SDL's name for their type ("switchpro", "joyconleft", ...).
+            const char* t = SDL_GetGamepadStringForType(SDL_GetGamepadType(pad));
+            std::string s = t ? t : "";
+            return s.rfind("switch", 0) == 0 || s.rfind("joycon", 0) == 0 ? "switch" : "generic";
+        }
     }
 }
 
@@ -686,10 +733,12 @@ int main() {
     sigaction(SIGILL, &sa, nullptr);
     sigaction(SIGFPE, &sa, nullptr);
 
-    // MoltenVK encodes the Metal commands of a vkQueueSubmit on its own dispatch queue instead of inside the call: the
-    // ~2.4 ms of encoding per frame left the replay thread (57-60 fps against 52-58 running about the island at 60 fps
-    // on an M1 Air). Set before the Vulkan library loads; an MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS in the environment wins.
-    setenv("MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS", "0", 0);
+    // MoltenVK encodes the Metal commands of a vkQueueSubmit inside the call. Its own dispatch queue (=0) took ~2.4 ms
+    // of encoding per frame off the replay thread, but crashed MoltenVK 1.4.2 within minutes at 60 fps (signal 11 in
+    // MVKAttachmentDescription, the render pass of a vkCmdBeginRendering, on its encoding thread; 5 of 5 runs, none of
+    // 2 synchronous; the image views it named were all alive). Set before the Vulkan library loads; an
+    // MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS in the environment wins.
+    setenv("MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS", "1", 0);
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_AUDIO)) {
         std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return 1;
@@ -726,8 +775,17 @@ int main() {
                 g_pixel_w = uint32_t(e.window.data1), g_pixel_h = uint32_t(e.window.data2);
                 break;
             case SDL_EVENT_WINDOW_DISPLAY_CHANGED:
+            case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
             case SDL_EVENT_DISPLAY_CURRENT_MODE_CHANGED:
+            case SDL_EVENT_WINDOW_RESIZED:
                 update_refresh_hz();
+                // Another display (its own pixels per point), or a size SDL reported in points only: the pixel size
+                // read again, so video.aspect = auto and the swapchain follow the screen the window is on.
+                if (g_window) {
+                    int pw = 0, ph = 0;
+                    if (SDL_GetWindowSizeInPixels(g_window, &pw, &ph) && pw > 0 && ph > 0)
+                        g_pixel_w = uint32_t(pw), g_pixel_h = uint32_t(ph);
+                }
                 break;
             case SDL_EVENT_WINDOW_ENTER_FULLSCREEN:
             case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN: {

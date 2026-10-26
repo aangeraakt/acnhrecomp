@@ -93,7 +93,7 @@ if(APPLE)
     set_target_properties(metal_shader_check PROPERTIES OBJCXX_STANDARD 20)
 endif()
 
-# Dear ImGui: the settings screen and the launcher. tools/setup_acnh.sh downloads it into private/third_party/imgui.
+# Dear ImGui: the settings screen and the launcher. tools/setup_acnh.py downloads it into private/third_party/imgui.
 set(NX_IMGUI_DIR "${CMAKE_SOURCE_DIR}/private/third_party/imgui" CACHE PATH "Dear ImGui sources")
 
 # The launcher (launcher/): the program a player opens first. It has no game code, so it builds from a plain
@@ -132,6 +132,10 @@ foreach(mod ${NX_MODULES})
         # Linux x86-64: AVX2/FMA/BMI as the Windows build (/arch:AVX2); no FMA contraction, so a guest fmul + fadd
         # rounds twice, as on the Switch.
         target_compile_options(game_${mod} PRIVATE -O2 -fvisibility=hidden -march=x86-64-v3 -ffp-contract=off)
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        # Windows, clang-cl: /arch:AVX2 comes from above; no FMA contraction either (clang fuses within a statement
+        # by default).
+        target_compile_options(game_${mod} PRIVATE /O2 /clang:-ffp-contract=off)
     endif()
 endforeach()
 
@@ -163,6 +167,7 @@ set(NX_RUNTIME_SOURCES
     runtime/src/hle_bcat.cpp
     runtime/src/hle_movie.cpp
     runtime/src/hle_friends.cpp
+    runtime/src/hle_ngc.cpp
     runtime/src/config.cpp
     runtime/src/glyphs.cpp
     runtime/src/input_script.cpp
@@ -285,9 +290,32 @@ elseif(UNIX)
     # The executable (PIE) loads near 0x55_5555_0000_0000, far above the guest ranges (0x40_0000_0000 and up). The
     # game runs on its own thread with a 64 MiB stack (platform_linux.cpp).
 else()
-    add_executable(${NX_GAME} ${NX_RUNTIME_SOURCES} runtime/src/platform_win.cpp runtime/src/memguard_win.cpp)
-    target_include_directories(${NX_GAME} PRIVATE runtime/include runtime/src "${NX_GAME_DIR}" "${NX_VULKAN_SDK}/Include")
-    target_link_libraries(${NX_GAME} PRIVATE ${NX_GAME_LIBS} xinput xaudio2 ole32 psapi)
+    # Windows: SDL3 (window, input, audio, pickers: platform_sdl.cpp) from SDL's VC development package
+    # (-DCMAKE_PREFIX_PATH=<SDL3-x.y.z>, tools/setup_acnh.py fetches it), the OS part in platform_win.cpp, and the
+    # Vulkan loader of the GPU driver. Vulkan headers: NX_VULKAN_INCLUDE (the setup's Vulkan-Headers) or the LunarG SDK.
+    find_package(SDL3 REQUIRED CONFIG)
+    find_path(NX_VULKAN_INCLUDE vulkan/vulkan.h HINTS "${NX_VULKAN_SDK}/Include")
+    add_executable(${NX_GAME} ${NX_RUNTIME_SOURCES} runtime/src/platform_win.cpp runtime/src/platform_sdl.cpp
+                   runtime/src/memguard_win.cpp)
+    target_include_directories(${NX_GAME} PRIVATE runtime/include runtime/src "${NX_GAME_DIR}" "${NX_VULKAN_INCLUDE}")
+    target_link_libraries(${NX_GAME} PRIVATE ${NX_GAME_LIBS} SDL3::SDL3 ole32 psapi winmm dxgi)
+    # SDL3.dll next to the game, so it starts from a double click.
+    add_custom_command(TARGET ${NX_GAME} POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                       $<TARGET_FILE:SDL3::SDL3> $<TARGET_FILE_DIR:${NX_GAME}>)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        # No fused multiply-add the guest code did not ask for (its float results must match).
+        target_compile_options(${NX_GAME} PRIVATE /clang:-ffp-contract=off)
+        # __builtin_cpu_supports (nx/cpu.h, the AES-NI path) needs compiler-rt's builtins, which clang-cl does not
+        # link by itself: lib/clang/<version>/lib/windows next to the compiler.
+        get_filename_component(NX_LLVM_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
+        file(GLOB NX_CLANG_RT "${NX_LLVM_DIR}/../lib/clang/*/lib/windows/clang_rt.builtins-x86_64.lib")
+        if(NX_CLANG_RT)
+            list(GET NX_CLANG_RT 0 NX_CLANG_RT)
+            target_link_libraries(${NX_GAME} PRIVATE "${NX_CLANG_RT}")
+        else()
+            message(WARNING "clang_rt.builtins-x86_64.lib not found next to ${CMAKE_CXX_COMPILER}: the link will miss __cpu_model")
+        endif()
+    endif()
     # The runtime uses the portable C library (getenv, fopen, ...) on every host: no "_s" variants.
     target_compile_definitions(${NX_GAME} PRIVATE _CRT_SECURE_NO_WARNINGS _SILENCE_CXX20_U8PATH_DEPRECATION_WARNING)
     if(MSVC)
@@ -297,9 +325,9 @@ else()
     endif()
 endif()
 
-# The settings screen (runtime/src/ui): Dear ImGui (NX_IMGUI_DIR, above). Without it (or on Windows/Android until
-# their platform layers feed it) the screen is a stub; config.ini still works.
-if(EXISTS "${NX_IMGUI_DIR}/imgui.cpp" AND NOT WIN32)
+# The settings screen (runtime/src/ui): Dear ImGui (NX_IMGUI_DIR, above). Without it the screen is a stub;
+# config.ini still works.
+if(EXISTS "${NX_IMGUI_DIR}/imgui.cpp")
     target_sources(${NX_GAME} PRIVATE runtime/src/ui/ui.cpp runtime/src/ui/settings.cpp runtime/src/ui/i18n.cpp
         runtime/src/ui/theme.cpp ${NX_IMGUI_DIR}/imgui.cpp ${NX_IMGUI_DIR}/imgui_draw.cpp ${NX_IMGUI_DIR}/imgui_tables.cpp
         ${NX_IMGUI_DIR}/imgui_widgets.cpp ${NX_IMGUI_DIR}/backends/imgui_impl_vulkan.cpp)

@@ -1,21 +1,24 @@
-// Windows host: memory, threads, time, files, the game window (F11 / Alt+Enter fullscreen), XInput + keyboard,
-// XAudio2, the Vulkan loader and win32 surface, crash handler, hardware watchpoints (NX_WATCH) and main().
+// Windows host (x86-64): memory (VirtualAlloc at fixed addresses), Win32 threads, high-resolution sleeps, files with
+// UTF-8 paths, the crash handler, hardware watchpoints (NX_WATCH) and main(). The window, input (every controller SDL
+// knows), audio, the settings screen and the event loop are platform_sdl.cpp's.
+//
+// main() starts the game (nx::boot) on its own thread with a 64 MiB stack and then
+// runs the SDL event loop.
 #include <algorithm>
-#include <cctype>
 #include <atomic>
-#include <chrono>
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
-#include <thread>
+#include <string>
 
 #include <windows.h>
-#include <xaudio2.h>
-#include <xinput.h>
+#include <dxgi.h>
+#include <timeapi.h>
 
-#define VK_NO_PROTOTYPES
-#define VK_USE_PLATFORM_WIN32_KHR
-#include <vulkan/vulkan.h>
+#include <SDL3/SDL.h>
+#define SDL_MAIN_HANDLED  // SDL_RegisterApp only: main() stays ours
+#include <SDL3/SDL_main.h>
 
 #include <nx/game.h>
 #include <nx/runtime.h>
@@ -24,9 +27,9 @@
 #include "config.h"
 #include "bug_report.h"
 #include "platform.h"
+#include "platform_sdl.h"
 
 namespace nx {
-HWND g_window = nullptr;
 void boot();
 }  // namespace nx
 
@@ -60,28 +63,91 @@ static DWORD WINAPI thread_entry(void* p) {
 }
 
 void start_thread(ThreadFn fn, void* arg, size_t stack_size) {
-    CreateThread(nullptr, stack_size, thread_entry, new ThreadStart{fn, arg}, STACK_SIZE_PARAM_IS_A_RESERVATION,
-                 nullptr);
+    HANDLE h = CreateThread(nullptr, stack_size, thread_entry, new ThreadStart{fn, arg},
+                            STACK_SIZE_PARAM_IS_A_RESERVATION, nullptr);
+    if (h) CloseHandle(h);
 }
 
 void exit_thread() { ExitThread(0); }
-void exit_process(int code) { ExitProcess(UINT(code)); }
-void sleep_ns(int64_t ns) { std::this_thread::sleep_for(std::chrono::nanoseconds(ns)); }
-void yield() { SwitchToThread(); }
-void set_thread_name(const char*) {}
-float default_render_scale() { return 1.0f; }
-void release_window(void*) {}
-uint64_t window_generation() { return 1; }
-void audio_pause(bool) {}
-
-std::string setting(const std::string& key) {
-    std::string env = "NX_";
-    for (char ch : key) env += char(std::toupper(static_cast<unsigned char>(ch)));
-    const char* v = std::getenv(env.c_str());
-    return v ? v : "";
+void exit_process(int code) {
+    std::fflush(nullptr);
+    ExitProcess(UINT(code));
 }
+
+// Sleep() and std::this_thread::sleep_for round up to the timer tick (1-15.6 ms), which made the vsync and present
+// pacing uneven (G4). A high-resolution waitable timer per thread sleeps to within ~0.5 ms; the last stretch spins.
+void sleep_ns(int64_t ns) {
+    if (ns <= 0) return;
+    thread_local HANDLE timer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                                                       TIMER_ALL_ACCESS);
+    const uint64_t end = monotonic_ns() + uint64_t(ns);
+    if (ns > 600000) {
+        LARGE_INTEGER due;
+        due.QuadPart = -((ns - 500000) / 100);  // relative, in 100 ns units
+        if (timer && SetWaitableTimerEx(timer, &due, 0, nullptr, nullptr, nullptr, 0))
+            WaitForSingleObject(timer, INFINITE);
+        else
+            Sleep(DWORD((ns - 500000) / 1000000));
+    }
+    while (monotonic_ns() < end) YieldProcessor();
+}
+
+void yield() { SwitchToThread(); }
+
+// Thread names show in debuggers, profilers and crash dumps (G7).
+void set_thread_name(const char* name) {
+    int n = MultiByteToWideChar(CP_UTF8, 0, name, -1, nullptr, 0);
+    std::wstring w(size_t(n > 0 ? n : 1), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, name, -1, w.data(), n);
+    SetThreadDescription(GetCurrentThread(), w.c_str());
+}
+
 int64_t current_thread_id() { return int64_t(GetCurrentThreadId()); }
 bool profile(const int64_t*, const uint64_t* const*, size_t, int, const std::string&) { return false; }
+
+// The display's vblank through DXGI: the output of the monitor that shows the window, looked up again every 2 s (the
+// window may move to another monitor; on a laptop with two GPUs the output belongs to whichever drives the panel).
+uint64_t wait_vblank() {
+    static IDXGIFactory1* factory = nullptr;
+    static IDXGIOutput* output = nullptr;
+    static HMONITOR monitor = nullptr;
+    static uint64_t checked = 0;
+    static bool failed = false;
+    if (failed) return 0;
+    const uint64_t now = monotonic_ns();
+    if (!output || now - checked > 2000000000ull) {
+        checked = now;
+        if (!factory && FAILED(CreateDXGIFactory1(__uuidof(IDXGIFactory1), reinterpret_cast<void**>(&factory)))) {
+            failed = true;
+            return 0;
+        }
+        HWND hwnd = static_cast<HWND>(sdl_native_window());
+        HMONITOR m = hwnd ? MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY) : MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY);
+        if (m != monitor || !output) {
+            IDXGIOutput* found = nullptr;
+            IDXGIAdapter1* adapter = nullptr;
+            for (UINT a = 0; !found && factory->EnumAdapters1(a, &adapter) != DXGI_ERROR_NOT_FOUND; a++) {
+                IDXGIOutput* o = nullptr;
+                for (UINT k = 0; !found && adapter->EnumOutputs(k, &o) != DXGI_ERROR_NOT_FOUND; k++) {
+                    DXGI_OUTPUT_DESC d{};
+                    if (SUCCEEDED(o->GetDesc(&d)) && d.Monitor == m) found = o;
+                    else o->Release();
+                }
+                adapter->Release();
+            }
+            if (found) {
+                if (output) output->Release();
+                output = found, monitor = m;
+            }
+        }
+        if (!output) {
+            failed = true;
+            return 0;
+        }
+    }
+    if (FAILED(output->WaitForVBlank())) return 0;
+    return monotonic_ns();
+}
 
 uint64_t monotonic_ns() {
     static const LARGE_INTEGER f = [] {
@@ -91,7 +157,7 @@ uint64_t monotonic_ns() {
     }();
     LARGE_INTEGER t;
     QueryPerformanceCounter(&t);
-    return uint64_t(double(t.QuadPart) * 1e9 / double(f.QuadPart));
+    return uint64_t(t.QuadPart / f.QuadPart) * 1000000000ull + uint64_t(t.QuadPart % f.QuadPart) * 1000000000ull / uint64_t(f.QuadPart);
 }
 
 // ---- files and output -----------------------------------------------------------------------------------------
@@ -123,260 +189,11 @@ std::string data_root() {
     return r ? r : nx::game::kInfo.pc_data_root;
 }
 
-// ---- window ---------------------------------------------------------------------------------------------------
-
-static std::wstring widen(const char* s) { return std::wstring(s, s + std::strlen(s)); }  // ASCII titles
-// The game renders its swapchain at the render resolution; the window can be any size (the compositor scales).
-
-static constexpr DWORD kWindowed = WS_OVERLAPPEDWINDOW | WS_VISIBLE;
-static bool g_fullscreen = false;
-static WINDOWPLACEMENT g_placement{sizeof(WINDOWPLACEMENT)};
-
-static void toggle_fullscreen(HWND h) {
-    if (!g_fullscreen) {
-        MONITORINFO mi{sizeof mi};
-        GetWindowPlacement(h, &g_placement);
-        GetMonitorInfoW(MonitorFromWindow(h, MONITOR_DEFAULTTOPRIMARY), &mi);
-        SetWindowLongW(h, GWL_STYLE, WS_POPUP | WS_VISIBLE);
-        SetWindowPos(h, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right - mi.rcMonitor.left,
-                     mi.rcMonitor.bottom - mi.rcMonitor.top, SWP_FRAMECHANGED);
-    } else {
-        SetWindowLongW(h, GWL_STYLE, kWindowed);
-        SetWindowPlacement(h, &g_placement);
-        SetWindowPos(h, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
-    }
-    g_fullscreen = !g_fullscreen;
-}
-
-static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM w, LPARAM l) {
-    switch (msg) {
-        case WM_CLOSE:
-            log("window closed");
-            ExitProcess(0);
-        case WM_KEYDOWN:
-            if (w == VK_F11) toggle_fullscreen(h);
-            break;
-        case WM_SYSKEYDOWN:
-            if (w == VK_RETURN) {  // Alt+Enter
-                toggle_fullscreen(h);
-                return 0;
-            }
-            break;
-        case WM_SYSCHAR:
-            if (w == VK_RETURN) return 0;  // no beep
-            break;
-    }
-    return DefWindowProcW(h, msg, w, l);
-}
-
-// The window lives on its own thread so its message loop keeps running whatever the game threads do.
-static void window_thread(std::atomic<bool>* ready) {
-    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-    WNDCLASSW wc{};
-    wc.lpfnWndProc = wndproc;
-    wc.hInstance = GetModuleHandleW(nullptr);
-    const std::wstring cls = widen(nx::game::kInfo.title) + L"Recomp";  // tools/capture.ps1 finds the window by it
-    wc.lpszClassName = cls.c_str();
-    wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    RegisterClassW(&wc);
-    // The render resolution's aspect (NX_RESOLUTION, default 16:9), about 80% of the screen height, centred.
-    unsigned rw = 16, rh = 9;
-    if (const char* r = std::getenv("NX_RESOLUTION")) std::sscanf(r, "%ux%u", &rw, &rh);
-    int sh = GetSystemMetrics(SM_CYSCREEN);
-    int ch = std::max(540, sh * 8 / 10), cw = int(int64_t(ch) * rw / std::max(1u, rh));
-    RECT r{0, 0, cw, ch};
-    AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
-    int w = r.right - r.left, h = r.bottom - r.top;
-    int x = (GetSystemMetrics(SM_CXSCREEN) - w) / 2, y = (sh - h) / 2;
-    // NX_HEADLESS: created hidden (the surface still needs a window), never brought to the front.
-    const DWORD style = headless() ? (kWindowed & ~WS_VISIBLE) : kWindowed;
-    g_window = CreateWindowW(wc.lpszClassName, (widen(nx::game::kInfo.title) + L" (Switch recomp)  -  F11: fullscreen").c_str(), style,
-                             std::max(0, x), std::max(0, y), w, h, nullptr, nullptr, wc.hInstance, nullptr);
-    if (const char* f = std::getenv("NX_FULLSCREEN"); f && *f == '1' && !headless()) toggle_fullscreen(g_window);
-    if (!headless()) SetForegroundWindow(g_window);
-    *ready = true;
-    MSG m;
-    while (GetMessageW(&m, nullptr, 0, 0) > 0) {
-        TranslateMessage(&m);
-        DispatchMessageW(&m);
-    }
-}
-
-void* create_window() {
-    if (!g_window) {
-        static std::atomic<bool> ready{false};
-        std::thread(window_thread, &ready).detach();
-        while (!ready) Sleep(1);
-    }
-    return g_window;
-}
-
-bool window_minimized() { return g_window && IsIconic(g_window); }
-
-void window_size(uint32_t& w, uint32_t& h) {
-    RECT r{};
-    if (g_window) GetClientRect(g_window, &r);
-    w = uint32_t(r.right - r.left);
-    h = uint32_t(r.bottom - r.top);
-}
-
-void screen_size(uint32_t& w, uint32_t& h) { window_size(w, h); }
-
-// ---- input: XInput pad 0 + keyboard ---------------------------------------------------------------------------
-
-static bool key(int vk) { return g_window && GetForegroundWindow() == g_window && (GetAsyncKeyState(vk) & 0x8000); }
-
-bool headless() {  // NX_HEADLESS (platform.h)
-    static const bool on = std::getenv("NX_HEADLESS") != nullptr;
-    return on;
-}
-
-void read_pad(PadState& p) {
-    XINPUT_STATE xs{};
-    if (XInputGetState(0, &xs) == ERROR_SUCCESS) {
-        const auto& g = xs.Gamepad;
-        if (g.wButtons & XINPUT_GAMEPAD_B) p.buttons |= kA;  // Nintendo layout
-        if (g.wButtons & XINPUT_GAMEPAD_A) p.buttons |= kB;
-        if (g.wButtons & XINPUT_GAMEPAD_Y) p.buttons |= kX;
-        if (g.wButtons & XINPUT_GAMEPAD_X) p.buttons |= kY;
-        if (g.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER) p.buttons |= kL;
-        if (g.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER) p.buttons |= kR;
-        if (g.bLeftTrigger > 100) p.buttons |= kZL;
-        if (g.bRightTrigger > 100) p.buttons |= kZR;
-        if (g.wButtons & XINPUT_GAMEPAD_START) p.buttons |= kPlus;
-        if (g.wButtons & XINPUT_GAMEPAD_BACK) p.buttons |= kMinus;
-        if (g.wButtons & XINPUT_GAMEPAD_LEFT_THUMB) p.buttons |= kStickL;
-        if (g.wButtons & XINPUT_GAMEPAD_RIGHT_THUMB) p.buttons |= kStickR;
-        if (g.wButtons & XINPUT_GAMEPAD_DPAD_LEFT) p.buttons |= kLeft;
-        if (g.wButtons & XINPUT_GAMEPAD_DPAD_UP) p.buttons |= kUp;
-        if (g.wButtons & XINPUT_GAMEPAD_DPAD_RIGHT) p.buttons |= kRight;
-        if (g.wButtons & XINPUT_GAMEPAD_DPAD_DOWN) p.buttons |= kDown;
-        auto dz = [](int v) { return (v > -7849 && v < 7849) ? 0 : std::max(-kStickMax, std::min(kStickMax, v)); };
-        p.lx = dz(g.sThumbLX);
-        p.ly = dz(g.sThumbLY);
-        p.rx = dz(g.sThumbRX);
-        p.ry = dz(g.sThumbRY);
-    }
-    // Keyboard: WASD / arrows move, Space A, Shift B (dash), J X, K Y, Q/E L/R, Z/C ZL/ZR, Enter +, Esc -.
-    if (key('A') || key(VK_LEFT)) p.lx = -kStickMax;
-    if (key('D') || key(VK_RIGHT)) p.lx = kStickMax;
-    if (key('W') || key(VK_UP)) p.ly = kStickMax;
-    if (key('S') || key(VK_DOWN)) p.ly = -kStickMax;
-    if (key(VK_SPACE)) p.buttons |= kA;
-    if (key(VK_SHIFT)) p.buttons |= kB;
-    if (key('J')) p.buttons |= kX;
-    if (key('K')) p.buttons |= kY;
-    if (key('Q')) p.buttons |= kL;
-    if (key('E')) p.buttons |= kR;
-    if (key('Z')) p.buttons |= kZL;
-    if (key('C')) p.buttons |= kZR;
-    if (key(VK_RETURN)) p.buttons |= kPlus;
-    if (key(VK_ESCAPE)) p.buttons |= kMinus;
-    input_script(p);  // NX_INPUT_SCRIPT (input_script.cpp): unattended runs
-}
-
-// ---- audio: XAudio2 -------------------------------------------------------------------------------------------
-
-namespace {
-
-std::atomic<uint32_t> g_queued{0};
-AudioDone g_done = nullptr;
-
-struct Voice : IXAudio2VoiceCallback {
-    void STDMETHODCALLTYPE OnBufferEnd(void* ctx) noexcept override {
-        auto* p = static_cast<std::pair<void*, std::vector<uint8_t>>*>(ctx);
-        g_queued--;
-        g_done(p->first);
-        delete p;
-    }
-    void STDMETHODCALLTYPE OnVoiceProcessingPassStart(UINT32) noexcept override {}
-    void STDMETHODCALLTYPE OnVoiceProcessingPassEnd() noexcept override {}
-    void STDMETHODCALLTYPE OnStreamEnd() noexcept override {}
-    void STDMETHODCALLTYPE OnBufferStart(void*) noexcept override {}
-    void STDMETHODCALLTYPE OnLoopEnd(void*) noexcept override {}
-    void STDMETHODCALLTYPE OnVoiceError(void*, HRESULT) noexcept override {}
-};
-
-IXAudio2* g_xa = nullptr;
-IXAudio2SourceVoice* g_voice = nullptr;
-Voice g_callback;
-
-}  // namespace
-
-bool audio_open(AudioDone done) {
-    g_done = done;
-    // Headless test runs (and NX_MUTE=1) are silent: no device, the callers pace themselves with a timer.
-    if (headless() || std::getenv("NX_MUTE")) return false;
-    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    if (FAILED(XAudio2Create(&g_xa, 0, XAUDIO2_DEFAULT_PROCESSOR))) return false;
-    IXAudio2MasteringVoice* master = nullptr;
-    if (FAILED(g_xa->CreateMasteringVoice(&master))) return false;
-    WAVEFORMATEX wf{};
-    wf.wFormatTag = WAVE_FORMAT_PCM;
-    wf.nChannels = 2;
-    wf.nSamplesPerSec = 48000;
-    wf.wBitsPerSample = 16;
-    wf.nBlockAlign = 4;
-    wf.nAvgBytesPerSec = 48000 * 4;
-    if (FAILED(g_xa->CreateSourceVoice(&g_voice, &wf, 0, 2.0f, &g_callback))) return false;
-    g_voice->Start();
-    return true;
-}
-
-bool audio_submit(const void* data, size_t bytes, void* ctx) {
-    if (!g_voice) return false;
-    auto* p = new std::pair<void*, std::vector<uint8_t>>(
-        ctx, std::vector<uint8_t>(static_cast<const uint8_t*>(data), static_cast<const uint8_t*>(data) + bytes));
-    XAUDIO2_BUFFER xb{};
-    xb.AudioBytes = UINT32(bytes);
-    xb.pAudioData = p->second.data();
-    xb.pContext = p;
-    g_queued++;
-    g_voice->SubmitSourceBuffer(&xb);
-    return true;
-}
-
-uint32_t audio_queued() { return g_queued; }
-
-// ---- Vulkan ---------------------------------------------------------------------------------------------------
-
-void* vulkan_get_instance_proc_addr() {
-    HMODULE m = LoadLibraryW(L"vulkan-1.dll");
-    return m ? reinterpret_cast<void*>(GetProcAddress(m, "vkGetInstanceProcAddr")) : nullptr;
-}
-
-const char* vulkan_surface_extension() { return VK_KHR_WIN32_SURFACE_EXTENSION_NAME; }
-
-int vulkan_create_surface(void* instance, void* native_window, uint64_t* surface, void* gipa) {
-    auto create = reinterpret_cast<PFN_vkCreateWin32SurfaceKHR>(
-        reinterpret_cast<PFN_vkGetInstanceProcAddr>(gipa)(static_cast<VkInstance>(instance), "vkCreateWin32SurfaceKHR"));
-    VkWin32SurfaceCreateInfoKHR ci{VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR};
-    ci.hinstance = GetModuleHandleW(nullptr);
-    ci.hwnd = static_cast<HWND>(native_window);
-    VkSurfaceKHR s = VK_NULL_HANDLE;
-    VkResult r = create(static_cast<VkInstance>(instance), &ci, nullptr, &s);
-    *surface = reinterpret_cast<uint64_t>(s);
-    return r;
-}
-
-// ---- settings screen hooks (platform.h): the screen is not built for this platform yet (ui_stub.cpp) ----
-void set_fullscreen(bool) {}
-int display_refresh_hz() { return 60; }
-void set_master_volume(float) {}
-std::string controller_name() { return ""; }
-std::string controller_kind() { return ""; }
-void rumble(float low_freq, float high_freq, uint32_t duration_ms) {
-    (void)duration_ms;
-    XINPUT_VIBRATION v{};
-    v.wLeftMotorSpeed = static_cast<WORD>(std::clamp(low_freq, 0.0f, 1.0f) * 65535.0f);
-    v.wRightMotorSpeed = static_cast<WORD>(std::clamp(high_freq, 0.0f, 1.0f) * 65535.0f);
-    XInputSetState(0, &v);
-}
-void open_path(const std::string&) {}
-void pick_path(bool, const std::string&) {}
-bool pick_result(std::string& path) {
-    path.clear();
-    return false;
+std::string setting(const std::string& key) {
+    std::string env = "NX_";
+    for (char ch : key) env += char(std::toupper(static_cast<unsigned char>(ch)));
+    const char* v = std::getenv(env.c_str());
+    return v ? v : "";
 }
 
 }  // namespace nx::plat
@@ -385,7 +202,7 @@ bool pick_result(std::string& path) {
 
 namespace {
 
-// NX_WATCH=<hex address>: hardware write watchpoint (DR0, 8 bytes) on the main thread; each write (up to 30) logs
+// NX_WATCH=<hex address>: hardware write watchpoint (DR0, 8 bytes) on the game's thread; each write (up to 30) logs
 // the host module/offset and the guest context.
 uint64_t g_watch = 0;
 
@@ -464,10 +281,9 @@ LONG WINAPI crash_handler(EXCEPTION_POINTERS* e) {
     host_backtrace(*e->ContextRecord);
     dump_guest(nx::current_cpu());
     nx::log_recent_files();
+    std::fflush(nullptr);
     return EXCEPTION_EXECUTE_HANDLER;
 }
-
-}  // namespace
 
 // NX_THROW_TRACE=1: log the host call stack of every C++ throw that is not a guest longjmp (first chance).
 LONG WINAPI throw_tracer(EXCEPTION_POINTERS* e) {
@@ -484,18 +300,20 @@ LONG WINAPI throw_tracer(EXCEPTION_POINTERS* e) {
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
-int main() {
-    nx::config_apply();  // config.ini -> NX_* defaults, before anything reads them (config.h)
-    if (nx::report_mode()) return 0;
-    nx::plat::start_memory_guard();  // before anything can grow: a leak must never freeze the machine (memguard_win.cpp)
-    SetUnhandledExceptionFilter(crash_handler);
-    if (const char* t = std::getenv("NX_THROW_TRACE"); t && *t == '1') AddVectoredExceptionHandler(1, throw_tracer);
-    if (const char* w = std::getenv("NX_WATCH")) {
-        g_watch = std::strtoull(w, nullptr, 16);
-        AddVectoredExceptionHandler(1, watch_handler);
-        arm_watch(GetCurrentThread());
-        nx::log("watching writes to %llx", (unsigned long long)g_watch);
-    }
+// The process at full speed: 1 ms timer resolution for the waits the game's own threads make, and no EcoQoS power
+// throttling when the window is in the background or the laptop is on battery (G4, G10).
+void tune_process() {
+    timeBeginPeriod(1);
+    PROCESS_POWER_THROTTLING_STATE pt{};
+    pt.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
+    pt.ControlMask = PROCESS_POWER_THROTTLING_EXECUTION_SPEED | PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION;
+    pt.StateMask = 0;
+    SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &pt, sizeof pt);
+}
+
+void game_thread() {
+    nx::plat::set_thread_name("game");
+    if (g_watch) arm_watch(GetCurrentThread());
     try {
         nx::boot();
     } catch (const nx::LongJmp& j) {
@@ -503,7 +321,34 @@ int main() {
     } catch (const std::exception& e) {
         nx::fatal("host exception: %s", e.what());
     }
-    return 0;
+}
+
+}  // namespace
+
+int main() {
+    nx::config_apply();  // config.ini -> NX_* defaults, before anything reads them (config.h)
+    if (nx::report_mode()) return 0;
+    SetUnhandledExceptionFilter(crash_handler);
+    if (const char* t = std::getenv("NX_THROW_TRACE"); t && *t == '1') AddVectoredExceptionHandler(1, throw_tracer);
+    if (const char* w = std::getenv("NX_WATCH")) {
+        g_watch = std::strtoull(w, nullptr, 16);
+        AddVectoredExceptionHandler(1, watch_handler);
+        nx::log("watching writes to %llx", (unsigned long long)g_watch);
+    }
+    tune_process();
+
+    // The window class stays "<game title>Recomp": tools/capture.ps1 finds the window by it.
+    std::string cls = std::string(nx::game::kInfo.title) + "Recomp";
+    SDL_RegisterApp(cls.c_str(), 0, nullptr);
+    if (!nx::plat::sdl_start()) return 1;
+
+    nx::plat::start_memory_guard();  // before anything can grow: a leak must never freeze the machine (memguard_win.cpp)
+
+    // The game on its own thread, with a big stack (recompiled calls nest deeply); the main thread keeps the event
+    // loop.
+    nx::plat::start_thread([](void*) { game_thread(); nx::plat::exit_process(0); }, nullptr, 64ull << 20);
+
+    nx::plat::sdl_main_loop();
 }
 
 namespace nx {

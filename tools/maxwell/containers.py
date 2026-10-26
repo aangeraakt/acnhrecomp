@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Nintendo shader containers: find every Maxwell shader in a file, describe it, optionally extract it.
+"""Switch shader containers: find every Maxwell shader in a file, describe it, optionally extract it.
 
 Usage:
   python tools/maxwell/containers.py <file> [--extract <outdir> [--unique]] [--list] [--reflect]
@@ -7,9 +7,9 @@ Usage:
 
 Understood formats (docs/nvn/SHADERS.md has the layouts and what is verified vs. inferred):
   SARC   archive; every member is opened again (nesting is followed)
-  FSHA   NintendoWare G3d2 shader archive (.bfsha): shading models, programs, their BNSH
+  FSHA   NW G3d2 shader archive (.bfsha): shading models, programs, their BNSH
   BNSH   nn::gfx shader file: variations -> program -> per-stage code + NVN control section
-  VFXB   NintendoWare Vfx2 effect binary: its GRSR/GRSC sections hold BNSH files
+  VFXB   NW Vfx2 effect binary: its GRSR/GRSC sections hold BNSH files
   BAHS   agl shader archive binary (.sharcb): programs, variations, per-stage records
   BYML   (.esetb.byml) not parsed: the VFXB inside is found by its magic
 Files ending in .zs are zstd and are decompressed first (zstandard module or the zstd tool).
@@ -264,7 +264,7 @@ def reflection(d, base, r):
 
 
 # ---------------------------------------------------------------------------------------------------------------
-# FSHA: NintendoWare G3d2 ResShaderArchive (.bfsha)
+# FSHA: NW G3d2 ResShaderArchive (.bfsha)
 
 def parse_fsha(d, base, path, reflect=False):
     if bytes(d[base:base + 8]) != b"FSHA    ":
@@ -306,7 +306,7 @@ def parse_fsha(d, base, path, reflect=False):
 
 
 # ---------------------------------------------------------------------------------------------------------------
-# VFXB: NintendoWare Vfx2 effect binary
+# VFXB: NW Vfx2 effect binary
 
 def parse_vfxb(d, base, path, reflect=False):
     """Sections of 0x20-byte headers: magic, u32 size, u32 child offset, u32 next offset (both relative to the
@@ -548,6 +548,15 @@ def safe_name(sid):
     return re.sub(r"[^A-Za-z0-9._-]+", "_", sid).strip("_")
 
 
+def output_allowed(path):
+    """Game data may go to private/ or anywhere outside the repository (an install folder), never elsewhere in the
+    repository, where it could end up in a commit."""
+    real = os.path.realpath(path)
+    repo = os.path.realpath(REPO)
+    return (real.startswith(os.path.realpath(os.path.join(REPO, "private")) + os.sep)
+            or not (real == repo or real.startswith(repo + os.sep)))
+
+
 def extract(c, outdir, data, unique=False):
     """Write every stage's code block and control section, and manifest.tsv (one line per stage).
 
@@ -555,8 +564,8 @@ def extract(c, outdir, data, unique=False):
     once (variations share code heavily: the uber shader has 17,160 stages but 4,857 distinct code blocks).
     """
     real = os.path.realpath(outdir)
-    if not real.startswith(os.path.realpath(os.path.join(REPO, "private")) + os.sep):
-        sys.exit(f"refusing to write outside private/: {outdir}")
+    if not output_allowed(outdir):
+        sys.exit(f"refusing to write game data into the repository outside private/: {outdir}")
     os.makedirs(real, exist_ok=True)
     written = set()
     with open(os.path.join(real, "manifest.tsv"), "w", newline="\n") as m:  # LF on Windows too

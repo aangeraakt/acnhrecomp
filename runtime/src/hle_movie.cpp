@@ -1,4 +1,4 @@
-// movie::Decoder (NintendoSDK_movie, subsdk0) for VP8/VP9 video and Vorbis audio, decoded on the CPU with libvpx
+// movie::Decoder (SDK_movie, subsdk0) for VP8/VP9 video and Vorbis audio, decoded on the CPU with libvpx
 // and libvorbis.
 // First needed by Animal Crossing: New Horizons: the opening movie (Movie/OpeningMovie.webm, VP9 1080p + Vorbis).
 // The SDK's decoder is Android's stagefright on the console's NVDEC block (NvMM/OMX): it opens the nvhost driver

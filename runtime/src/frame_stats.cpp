@@ -6,6 +6,7 @@
 // NX_AFFINITY (Android): 1 puts the thread that replays and presents on the fastest cluster and the game's main
 // thread on the middle ones; 2 puts both on everything but the slowest cluster. Re-applied every 60 ticks (Android
 // moves an app's threads between cpusets). Unset or 0: the scheduler decides, as before.
+#include <atomic>
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
@@ -153,6 +154,7 @@ void thread_usage(long faults[2], long switches[2]) {
 #endif
 }
 Role g_roles[2] = {{"replay+present"}, {"game main"}};
+std::atomic<uint64_t> g_role_tid[2];
 
 }  // namespace
 
@@ -194,8 +196,11 @@ void request_performance_profile() {
 #endif
 }
 
+uint64_t frame_thread_id(int role) { return g_role_tid[role & 1].load(std::memory_order_relaxed); }
+
 void frame_thread_tick(int role) {
     Role& r = g_roles[role & 1];
+    g_role_tid[role & 1].store(uint64_t(current_thread_id()), std::memory_order_relaxed);
 #if defined(__ANDROID__)
     if (r.ticks % 60 == 0) place(role);
     int cpu = sched_getcpu();

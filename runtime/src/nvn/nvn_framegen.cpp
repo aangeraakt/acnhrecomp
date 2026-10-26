@@ -1,5 +1,5 @@
 // Built-in frame generation (NX_FRAMEGEN=1, video.frame_gen = builtin): the game keeps its 30 fps logic (it advances
-// per frame, docs/STATUS.md "60 fps") and the window shows 60, a frame made halfway between each two real ones.
+// per frame) and the window shows 60, a frame made halfway between each two real ones.
 //
 // When real frame N arrives (gpu_present), N-1 is still on the GPU: the motion between the two is estimated, the
 // in-between frame is drawn and presented at once, and N follows half a game frame later (nvn_vk.cpp). The cost is

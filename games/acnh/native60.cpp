@@ -1,5 +1,5 @@
 // 60 fps with the game's own logic stepping at 60 Hz (video.frame_rate = 60native: NX_NATIVE60=1 with the present
-// interval at 1). ACNH advances every system by a fixed step per frame (docs/STATUS.md, "60 fps"); here each system
+// interval at 1). ACNH advances every system by a fixed step per frame; here each system
 // whose step lives in one place gets half of it per frame, through instruction hooks (games/acnh/hooks.txt). What is
 // covered and what is not: docs/NATIVE60.md. NX_NATIVE60_TRACE=1 logs what the hooks see (a few lines per site).
 #include <atomic>
@@ -75,5 +75,11 @@ NX_HOOK(0x3a1d614, half_step<kLayout>);
 NX_HOOK(0x38b2b34, half_step<kModelAnim>);
 NX_HOOK(0x3a09404, half_step<kVfx>);
 NX_HOOK(0x3e01f08, half_step<kPhysics>);
+// 3.0.3 (games/acnh/hooks-3.0.3.txt): the same instructions 0x10 further.
+NX_HOOK(0x3dc32a8, half_step<kCharAnim>);
+NX_HOOK(0x3a1d624, half_step<kLayout>);
+NX_HOOK(0x38b2b44, half_step<kModelAnim>);
+NX_HOOK(0x3a09414, half_step<kVfx>);
+NX_HOOK(0x3e01f18, half_step<kPhysics>);
 
 }  // namespace nx

@@ -111,6 +111,12 @@ struct HookRegistrar {
 };
 #define NX_HOOK(offset, fn) static ::nx::HookRegistrar NX_HLE_CAT(hook_reg_, __LINE__)(offset, fn)
 
+// An engine's clear-on-bind, marked by a hook on the instruction that calls the clear (nvn_cmd.cpp): the next
+// nvnCommandBufferClearColor of this thread is dropped, the next ClearDepthStencil kept only the first time its target
+// is cleared in a frame. The hook-based form of NX_SKIP_CLEAR_AT / NX_CLEAR_ONCE_AT, for builds whose clear is a tail
+// call (its lr is the caller's, one of dozens). NX_BIND_CLEAR=0 turns it off.
+void nvn_mark_bind_clear();
+
 uint64_t hle_address(const char* name);  // thunk address; unknown names get a logging stub
 uint64_t hle_address_or(const char* name, HleFn fallback);  // unknown names get `fallback`
 const char* hle_current_name();  // inside an HLE function: the name its thunk was made for

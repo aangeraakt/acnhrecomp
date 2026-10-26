@@ -305,23 +305,16 @@ VkCommandBuffer next_part(Slot& s) {
 
 }  // namespace
 
-// On by default on macOS only (course 1-1 headless: ~50 -> ~59 fps there; DEBUG.md #61): MoltenVK encodes Metal inside
-// vkQueueSubmit, which is what the overlap hides. With native drivers (Windows, NVIDIA) the synchronous path played
-// at 58 fps against 40 and had none of the exploded meshes the pipelined one shows in course 1-1 (DEBUG-2 #76).
+// On by default. The synchronous path waits for every frame's fence on the thread that replays it, so the CPU and the
+// GPU take turns. ACNH 3.0.3 on the island (a laptop with a dedicated GPU, the same scripted walk): replay 19.2 ->
+// 14.8 ms and fence wait 7.8 -> 4.0 ms per frame, and 16 -> 2 frames over 50 ms in play, with the picture unchanged.
+// (Another game's course once showed exploded meshes pipelined on a native driver; ACNH has shown none.)
 // NX_PIPELINED=0: synchronous; 1..4: pipelined, that many submits in flight (2 at least). NX_ASYNC_GPU wins.
 bool pipelined() {
     static const bool on = [] {
         if (env_int("NX_ASYNC_GPU") > 0) return false;
         const char* e = std::getenv("NX_PIPELINED");
-#if defined(__APPLE__)
         return !e || std::atoi(e) > 0;
-#else
-        // An integrated GPU shares the CPU's memory and is the long side of a frame: with the fences not waited for,
-        // the Intel UHD went from 26.2 to 31.3 fps docked and 37.8 to 40.1 at 720p in the Flower Kingdom intro
-        // (docs/nvn/studies/intel-igpu-1710.md). Pipelined is the default there; NX_PIPELINED=0 turns it off.
-        if (!e) return gpu_is_integrated();
-        return std::atoi(e) > 0;
-#endif
     }();
     return on;
 }

@@ -6,17 +6,17 @@
 Where the icons come from: every button prompt in ACNH (dialogs, menus, the key guide at the bottom right) is a
 private-use character drawn with ParkExt.bfttf, the game's own extension font in Font/ScalableFont.sarc.zs. All 21
 combined fonts in Font/Fcpx.sarc.zs list ParkExt first, for E0A0-E153 and E200-E27F; the console's shared
-NintendoExtension font (pl type 5) is not in any of them. Messages carry the characters themselves (Dialog_*: E0A0
+extension font (pl type 5) is not in any of them. Messages carry the characters themselves (Dialog_*: E0A0
 "A" etc.), and the key guide's labels get theirs from String_*/STR_KeyIcon.msbt (001 = E0E0 A ... 029 = E236).
 
 So each style is a copy of ScalableFont.sarc.zs whose ParkExt has those glyphs replaced, drawn here as plain vector
 shapes in the box of the glyph they replace (same advance, baseline and size). The letters inside the icons come
-from the game's own nintendoP_Seurat-B. Output, one archive per style and face-button layout (input.layout):
+from the game's own label font (*P_Seurat-B). Output, one archive per style and face-button layout (input.layout):
 
     <out>/glyphs_<style>/<layout>/romfs/Font/ScalableFont.sarc.zs   (+ ParkExt.ttf next to romfs/, for inspection)
 
 with style xbox or playstation, and switch for the xbox layout only (the original glyphs, A and B swapped);
-switch with the nintendo layout is the RomFS itself. The runtime serves the chosen archive in place of the RomFS
+switch with the console layout is the RomFS itself. The runtime serves the chosen archive in place of the RomFS
 one (runtime/src/glyphs.cpp). Everything written embeds game data: it stays in private/ and is never committed.
 
 The fonts are single-colour: the game tints glyphs with the text colour, so an Xbox icon is told apart by its
@@ -40,15 +40,15 @@ from fontTools.ttLib import TTFont
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 ARCHIVE = "Font/ScalableFont.sarc.zs"
 EXT_FONT = "ParkExt.bfttf"
-LABEL_FONT = "nintendoP_Seurat-B.bfttf"
+LABEL_FONT_SUFFIX = "P_Seurat-B.bfttf"  # the game's label font, by the end of its name
 BFTTF_MAGIC = 0x18029A7F  # the decoded first word; the stored one is this XOR the key
 K = 0.5522847498  # cubic Bezier circle constant
 
 # Which physical button presses each of the game's face buttons, per input.layout. This follows sample_input in
-# runtime/src/platform_linux.cpp: the xbox layout swaps A and B only (confirm on the bottom), X and Y keep their
+# runtime/src/platform_sdl.cpp: the xbox layout swaps A and B only (confirm on the bottom), X and Y keep their
 # Switch positions. Change it here if the runtime's mapping changes.
 LAYOUTS = {
-    "nintendo": {"A": "east", "B": "south", "X": "north", "Y": "west"},
+    "console": {"A": "east", "B": "south", "X": "north", "Y": "west"},
     "xbox": {"A": "south", "B": "east", "X": "north", "Y": "west"},
 }
 # What each controller prints on its face buttons, by position.
@@ -57,7 +57,7 @@ FACE_LABELS = {
     "xbox": {"south": "A", "east": "B", "west": "X", "north": "Y"},
     "playstation": {"south": "cross", "east": "circle", "west": "square", "north": "triangle"},
 }
-# The other buttons do not move with the layout: SDL's shoulders, triggers, Start and Back (platform_linux.cpp).
+# The other buttons do not move with the layout: SDL's shoulders, triggers, Start and Back (platform_sdl.cpp).
 OTHER_LABELS = {
     "xbox": {"L": "LB", "R": "RB", "ZL": "LT", "ZR": "RT", "plus": "menu", "minus": "view"},
     "playstation": {"L": "L1", "R": "R1", "ZL": "L2", "ZR": "R2", "plus": "options", "minus": "create"},
@@ -374,7 +374,7 @@ def plan(style, layout):
         # The original icons, moved to the button that now does the job: with the xbox layout the game's A is the
         # pad's bottom button, which a Switch pad labels B.
         for game, (fill, line) in FACE.items():
-            src = next(g for g, p in LAYOUTS["nintendo"].items() if p == pos[game])
+            src = next(g for g, p in LAYOUTS["console"].items() if p == pos[game])
             if src != game:
                 out[fill], out[line] = ("copy", FACE[src][0]), ("copy", FACE[src][1])
         return out
@@ -437,6 +437,7 @@ def main():
 
     head, members, align = read_sarc(os.path.join(args.romfs, ARCHIVE))
     by_name = {name: k for k, (_, name, _) in enumerate(members)}
+    LABEL_FONT = next((n for n in by_name if n.endswith(LABEL_FONT_SUFFIX)), LABEL_FONT_SUFFIX)
     for need in (EXT_FONT, LABEL_FONT):
         if need not in by_name:
             sys.exit(f"{ARCHIVE} has no {need}: not ACNH 2.0+ data?")
@@ -447,7 +448,7 @@ def main():
     variants = []
     for style in [s.strip() for s in args.styles.split(",") if s.strip()]:
         for layout in LAYOUTS:
-            if style == "switch" and layout == "nintendo":
+            if style == "switch" and layout == "console":
                 continue  # the RomFS as it is
             font, done = build(ext_ttf, labels, style, layout)
             buf = io.BytesIO()

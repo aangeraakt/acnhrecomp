@@ -6,7 +6,7 @@
 // when the first word is the plain magic 0x18029A7F, and then only skips the header.
 //
 // So any TrueType font works: <data root>/fonts/shared_<type>.ttf (0 standard, 1 simplified Chinese, 2 its
-// extension, 3 traditional Chinese, 4 Korean, 5 Nintendo extension), else shared.ttf, else the host's own
+// extension, 3 traditional Chinese, 4 Korean, 5 extension), else shared.ttf, else the host's own
 // (NX_SHARED_FONT, or a system font on macOS, Android and Windows). The fonts on our own firmware dump can go there once decoded.
 #include <cstdio>
 #include <cstdlib>
@@ -90,7 +90,7 @@ void GetSharedFontSize(CPU& c) { c.x[0] = font(uint32_t(c.x[0])).size; }
 
 // Result GetSharedFont(int* count, SharedFontData* out, int max, settings::LanguageCode) (SDK 20, ACNH): every
 // shared font in the order of priority for the language, as SharedFontData {SharedFontType type; const void*
-// address; size_t size} (0x18 bytes). Western order: standard, the Chinese and Korean sets, then the Nintendo
+// address; size_t size} (0x18 bytes). Western order: standard, the Chinese and Korean sets, then the
 // extension (button icons).
 void GetSharedFont(CPU& c) {
     static const uint32_t kOrder[] = {0, 1, 2, 3, 4, 5};

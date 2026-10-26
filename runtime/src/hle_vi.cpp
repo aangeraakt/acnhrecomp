@@ -1,6 +1,10 @@
 // nn::vi (display/layers) and nv:: (graphics driver setup) at the API level. The layer is the platform's window
 // (Win32 window / Android surface); its handle is the "native window" the game hands to vkCreateViSurfaceNN, which
 // the Vulkan bridge turns into the platform's surface.
+#include <atomic>
+#include <chrono>
+#include <cmath>
+#include <condition_variable>
 #include <cstdlib>
 #include <memory>
 #include <mutex>
@@ -24,6 +28,42 @@ uint64_t display_period_ns() {
         return uint64_t(1'000'000'000ull / uint64_t(hz));
     }();
     return p;
+}
+
+// The real display's vblanks (plat::wait_vblank), when it refreshes at 60 Hz or a multiple of it (120, 240: every 2nd,
+// 4th one is a 60 Hz tick). A timed 60 Hz tick drifts against the display's own (59.94 / 60.02 Hz panels): every so
+// often a frame lands on the other side of a vblank and shows for 3 vblanks, the next for 1, a hitch felt in motion
+// although the count stays at 30 fps. With them, the vsync event fires on the display's ticks, the present pacing
+// uses their period, and each present is held until the vblank before its own (vblank_hold).
+// NX_REAL_VSYNC=0: the timed tick, as before.
+std::atomic<uint64_t> g_vblanks{0};       // real vblanks seen
+std::atomic<int> g_per_tick{0};           // real vblanks per 60 Hz tick; 0: none (timed)
+std::atomic<uint64_t> g_tick_period{0};   // the measured 60 Hz tick, ns
+std::atomic<int> g_present_interval{2};   // the window's present interval, in ticks (nvn_queue.cpp)
+std::mutex g_vb_lock;
+std::condition_variable g_vb_cv;
+
+uint64_t tick_period_ns() {
+    uint64_t p = g_tick_period.load(std::memory_order_relaxed);
+    return p ? p : display_period_ns();
+}
+
+void set_present_interval(int interval) { g_present_interval.store(interval, std::memory_order_relaxed); }
+
+// Called right before an image is queued for display: it waits until the vblank before the one this image is due at
+// (the previous image's + interval ticks), so it shows exactly there; a late image shows at the next vblank.
+void vblank_hold() {
+    const int k = g_per_tick.load(std::memory_order_relaxed), interval = g_present_interval.load(std::memory_order_relaxed);
+    if (!k || interval <= 0) return;
+    static uint64_t last = 0;
+    const uint64_t seen = g_vblanks.load(std::memory_order_acquire);
+    uint64_t due = last + uint64_t(interval) * uint64_t(k);
+    if (!last || due <= seen) due = seen + 1;
+    if (due - 1 > seen) {
+        std::unique_lock lk(g_vb_lock);
+        g_vb_cv.wait_for(lk, std::chrono::milliseconds(100), [&] { return g_vblanks.load(std::memory_order_acquire) >= due - 1; });
+    }
+    last = due;
 }
 
 namespace {
@@ -57,8 +97,51 @@ void nv_noop(CPU&) {}
 // SystemEvent (AttachSystemEvent with our read/write handles, auto clear: each wait consumes one vsync).
 std::shared_ptr<EventState> g_vsync = std::make_shared<EventState>();
 
+// Drives the vsync event from the display's vblanks; returns when there are none (or they stop) to fall back to the
+// timed tick.
+void real_vsync() {
+    if (std::getenv("NX_DISPLAY_HZ")) return;
+    if (const char* e = std::getenv("NX_REAL_VSYNC"); e && e[0] == '0') return;
+    uint64_t t0 = plat::wait_vblank(), t = t0;
+    if (!t0) return;
+    for (int i = 0; i < 30; i++)
+        if (!(t = plat::wait_vblank())) return;
+    double p = double(t - t0) / 30.0;
+    double r = 16'666'667.0 / p;
+    int k = int(std::lround(r));
+    if (k < 1 || k > 4 || std::fabs(r - k) > 0.03 * k) {
+        log("vi: the display refreshes at %.2f Hz, not a multiple of 60: timed vsync", 1e9 / p);
+        return;
+    }
+    log("vi: vsync from the display's vblanks (%.2f Hz, %d per 60 Hz tick)", 1e9 / p, k);
+    double period = p;
+    uint64_t prev = t;
+    g_tick_period = uint64_t(period * k);
+    g_per_tick = k;
+    for (uint64_t n = 0;;) {
+        uint64_t now = plat::wait_vblank();
+        if (!now) break;
+        double d = double(now - prev);
+        prev = now;
+        if (d > 0.5 * p && d < 1.5 * p) period = period * 0.99 + d * 0.01;
+        {
+            std::lock_guard lk(g_vb_lock);
+            g_vblanks.fetch_add(1, std::memory_order_release);
+        }
+        g_vb_cv.notify_all();
+        if (++n % uint64_t(k)) continue;
+        g_tick_period.store(uint64_t(period * k), std::memory_order_relaxed);
+        g_vsync->signaled = true;
+        notify_all();
+    }
+    g_per_tick = 0;
+    g_tick_period = 0;
+    log("vi: the display's vblanks stopped: timed vsync");
+}
+
 void vsync_thread() {
     plat::set_thread_name("vsync");
+    real_vsync();
     uint64_t next = plat::monotonic_ns();
     for (;;) {
         next += display_period_ns();

@@ -65,75 +65,55 @@ bool read_at(std::ifstream& f, uint64_t off, void* buf, size_t size) {
 uint32_t rd32(const uint8_t* p) { return uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24; }
 uint64_t rd64(const uint8_t* p) { return uint64_t(rd32(p)) | uint64_t(rd32(p + 4)) << 32; }
 
-// ---- NSP metadata ---------------------------------------------------------------------------------------------
+// ---- the game folder -----------------------------------------------------------------------------------------
 
-constexpr uint64_t kBaseTitle = 0x01006F8002326000ull;
-constexpr uint64_t kUpdateTitle = kBaseTitle + 0x800;
-constexpr uint32_t kVersion302 = 2162688;  // 3.0.2's title version (release 33 << 16)
-
-bool is_dlc_title(uint64_t id) { return (id & ~0xFFFull) == kBaseTitle + 0x1000 && (id & 0xFFF); }
-
-struct Meta {
-    bool pfs0 = false, xci = false;
-    uint64_t title = 0;
-    bool has_version = false;
-    uint32_t version = 0;
+// The builds of main the project knows (games/acnh/versions.txt: the first 16 bytes of main's ModuleId, at 0x40 of
+// the NSO): the version players know them by. Any other build is set up too, without the fixes at known addresses.
+struct KnownBuild {
+    const char* id;
+    const char* version;
+};
+constexpr KnownBuild kBuilds[] = {
+    {"FCD2BB238ABE99E925B4E452DF1F41F1", "3.0.2"},
+    {"FF1D1C05670DB6021C85B624A710B963", "3.0.3"},
+    {"0948E48778171EE6D5D7A65813ED5FCC", "2.0.7"},
+    {"7FC1BAFF976AECA414520CB89F4616CB", "1.0.0"},
 };
 
-std::string xml_tag(const std::string& xml, const char* tag) {
-    std::string open = std::string("<") + tag + ">", close = std::string("</") + tag + ">";
-    size_t a = xml.find(open);
-    if (a == std::string::npos) return "";
-    a += open.size();
-    size_t b = xml.find(close, a);
-    return b == std::string::npos ? "" : trim(xml.substr(a, b - a));
+// A child folder of `dir` named `name` in any case ("exefs", "ExeFS"), or "".
+fs::path child_dir(const fs::path& dir, const char* name) {
+    std::error_code ec;
+    for (const auto& e : fs::directory_iterator(dir, ec))
+        if (lower(str(e.path().filename())) == name && e.is_directory(ec)) return e.path();
+    return {};
 }
 
-// PFS0: "PFS0", file count, string table size; 0x18-byte entries {offset, size, name offset}; data after the table.
-// The title comes from <name>.cnmt.xml when the dump kept it, else from the ticket ("<rights id>.tik", whose first
-// 16 hex digits are the title).
-Meta read_meta(const std::string& path) {
-    Meta m;
-    std::ifstream f(u8(path), std::ios::binary);
-    uint8_t h[16];
-    if (!f || !read_at(f, 0, h, sizeof h)) return m;
-    if (std::memcmp(h, "PFS0", 4) != 0) {
-        uint8_t head[4];
-        m.xci = read_at(f, 0x100, head, 4) && std::memcmp(head, "HEAD", 4) == 0;
-        return m;
-    }
-    uint32_t count = rd32(h + 4), strings = rd32(h + 8);
-    if (count == 0 || count > 4096 || strings > (1u << 20)) return m;
-    m.pfs0 = true;
-    std::vector<uint8_t> table(size_t(count) * 0x18 + strings);
-    if (!read_at(f, 16, table.data(), table.size())) return m;
-    const uint64_t data = 16 + table.size();
-    const char* names = reinterpret_cast<const char*>(table.data() + size_t(count) * 0x18);
-    for (uint32_t i = 0; i < count; i++) {
-        const uint8_t* e = table.data() + size_t(i) * 0x18;
-        uint64_t off = rd64(e), size = rd64(e + 8);
-        uint32_t name_off = rd32(e + 16);
-        if (name_off >= strings) continue;
-        std::string name(names + name_off, strnlen(names + name_off, strings - name_off));
-        if (name.size() > 9 && name.compare(name.size() - 9, 9, ".cnmt.xml") == 0 && size < (1u << 16)) {
-            std::string xml(size_t(size), '\0');
-            if (!read_at(f, data + off, xml.data(), xml.size())) continue;
-            std::string id = xml_tag(xml, "Id"), ver = xml_tag(xml, "Version");
-            if (id.size() > 2) m.title = std::strtoull(id.c_str() + 2, nullptr, 16);
-            if (!ver.empty()) m.has_version = true, m.version = uint32_t(std::strtoul(ver.c_str(), nullptr, 10));
-            return m;
-        }
-        if (name.size() == 36 && name.compare(32, 4, ".tik") == 0 && !m.title)
-            m.title = std::strtoull(name.substr(0, 16).c_str(), nullptr, 16);
-    }
-    return m;
+struct GameFolder {
+    fs::path exefs, romfs, aoc;
+};
+
+// The parts of a game folder: exefs/ and romfs/ (or extract/romfs/), and aoc/ when there is add-on content.
+bool game_parts(const std::string& path, GameFolder& g) {
+    std::error_code ec;
+    fs::path d = u8(path);
+    if (!fs::is_directory(d, ec)) return false;
+    g.exefs = child_dir(d, "exefs");
+    g.romfs = child_dir(d, "romfs");
+    if (g.romfs.empty() && fs::is_directory(d / "extract" / "romfs", ec)) g.romfs = d / "extract" / "romfs";
+    g.aoc = child_dir(d, "aoc");
+    return !g.exefs.empty() && !g.romfs.empty();
 }
 
-std::string title_hex(uint64_t id) {
-    char b[24];
-    std::snprintf(b, sizeof b, "%016llX", static_cast<unsigned long long>(id));
+// main's build id (hex), "" when the file is not an NSO.
+std::string build_id(const fs::path& nso) {
+    std::ifstream f(nso, std::ios::binary);
+    uint8_t h[0x50];
+    if (!f || !read_at(f, 0, h, sizeof h) || std::memcmp(h, "NSO0", 4) != 0) return "";
+    char b[33];
+    for (int k = 0; k < 16; k++) std::snprintf(b + 2 * k, 3, "%02X", h[0x40 + k]);
     return b;
 }
+
 
 uint64_t file_size(const std::string& path) {
     std::error_code ec;
@@ -243,7 +223,7 @@ std::string repo_root() {
     std::error_code ec;
     for (const std::string& s : starts)
         for (fs::path p = u8(s); !p.empty(); p = p.parent_path()) {
-            if (fs::is_regular_file(p / "tools" / "setup_acnh.sh", ec)) return str(p);
+            if (fs::is_regular_file(p / "tools" / "setup_acnh.py", ec)) return str(p);
             if (p == p.parent_path()) break;
         }
     return "";
@@ -289,132 +269,41 @@ bool is_dir(const std::string& path) {
 
 FileCheck check_file(Kind kind, const std::string& path) {
     if (path.empty()) return {};
-    std::ifstream probe(u8(path), std::ios::binary);
-    if (!probe) return ok(Status::Error, tr("launcher.err.unreadable"));
-    probe.close();
-    const uint64_t size = file_size(path);
-    const std::string sz = human_size(size), e = ext(path);
-    if (kind == Kind::Keys) {
-        std::ifstream f(u8(path));
-        std::string line;
-        bool header = false;
-        for (int n = 0; n < 4000 && std::getline(f, line); n++)
-            if (trim(line).rfind("header_key", 0) == 0) header = true;
-        return header ? ok(Status::Ok, tr("launcher.ok.keys")) : ok(Status::Error, tr("launcher.err.keys"));
-    }
-    if (kind == Kind::TitleKeys) {  // "<rights id> = <title key>", 32 hex digits each
-        std::ifstream f(u8(path));
-        std::string line;
-        auto hex32 = [](const std::string& v) {
-            return v.size() == 32 && std::all_of(v.begin(), v.end(), [](char c) { return std::isxdigit(static_cast<unsigned char>(c)); });
-        };
-        for (int n = 0; n < 50 && std::getline(f, line); n++) {
-            size_t eq = line.find('=');
-            if (trim(line).empty()) continue;
-            if (eq != std::string::npos && hex32(trim(line.substr(0, eq))) && hex32(trim(line.substr(eq + 1))))
-                return ok(Status::Ok, tr("launcher.ok.title_keys"));
-            break;
-        }
-        return ok(Status::Error, tr("launcher.err.title_keys"));
-    }
     if (kind == Kind::Mod) {
         std::ifstream f(u8(path), std::ios::binary);
+        if (!f) return ok(Status::Error, tr("launcher.err.unreadable"));
         char m[4] = {};
         f.read(m, 4);
-        return std::memcmp(m, "PK\x03\x04", 4) == 0 ? ok(Status::Ok, trf("launcher.ok.zip", sz))
+        return std::memcmp(m, "PK\x03\x04", 4) == 0 ? ok(Status::Ok, trf("launcher.ok.zip", human_size(file_size(path))))
                                                     : ok(Status::Error, tr("launcher.err.zip"));
     }
-    if (e == ".nsz" || e == ".xcz") return ok(Status::Error, tr("launcher.err.compressed"));
-    Meta m = read_meta(path);
-    if (m.xci) {
-        if (kind == Kind::Base) return ok(Status::Warning, trf("launcher.ok.xci", sz));
-        return ok(Status::Error, tr("launcher.err.xci_not_base"));
+    // The game folder: only what is needed to tell it apart is read (the executables' headers, folder names).
+    GameFolder g;
+    if (!is_dir(path)) return ok(Status::Error, tr("launcher.err.not_folder"));
+    if (!game_parts(path, g)) return ok(Status::Error, tr("launcher.err.game_layout"));
+    std::error_code ec;
+    std::string id;
+    for (const char* m : {"main", "sdk", "subsdk0"}) {
+        std::string b = build_id(g.exefs / m);
+        if (b.empty()) return ok(Status::Error, trf("launcher.err.game_exefs", m));
+        if (std::strcmp(m, "main") == 0) id = b;
     }
-    if (!m.pfs0) return ok(Status::Error, tr("launcher.err.not_dump"));
-    if (!m.title) return ok(Status::Warning, trf("launcher.ok.unverified", sz));
-    const bool base = m.title == kBaseTitle, update = m.title == kUpdateTitle, dlc = is_dlc_title(m.title);
-    if (!base && !update && !dlc) return ok(Status::Error, trf("launcher.err.other_game", title_hex(m.title)));
-    switch (kind) {
-        case Kind::Base:
-            if (update) return ok(Status::Error, tr("launcher.err.is_update"));
-            if (dlc) return ok(Status::Error, tr("launcher.err.is_dlc"));
-            return ok(Status::Ok, trf("launcher.ok.base", sz));
-        case Kind::Update:
-            if (base) return ok(Status::Error, tr("launcher.err.is_base"));
-            if (dlc) return ok(Status::Error, tr("launcher.err.is_dlc"));
-            if (!m.has_version) return ok(Status::Warning, trf("launcher.warn.update_version", sz));
-            if (m.version != kVersion302)
-                return ok(Status::Error, trf("launcher.err.wrong_version", std::to_string(m.version >> 16)));
-            return ok(Status::Ok, trf("launcher.ok.update", sz));
-        default:
-            if (base) return ok(Status::Error, tr("launcher.err.is_base"));
-            if (update) return ok(Status::Error, tr("launcher.err.is_update"));
-            return ok(Status::Ok, trf("launcher.ok.dlc", sz));
-    }
+    if (!fs::is_directory(g.romfs / "Shader", ec)) return ok(Status::Error, tr("launcher.err.game_romfs"));
+    size_t addons = 0;
+    if (!g.aoc.empty())
+        for (const auto& e : fs::directory_iterator(g.aoc, ec))
+            if (e.is_directory(ec)) addons++;
+    std::string extra = addons ? trf("launcher.game.addons", std::to_string(addons)) : std::string();
+    for (const KnownBuild& k : kBuilds)
+        if (id == k.id) return ok(Status::Ok, trf("launcher.ok.game", k.version) + extra);
+    return ok(Status::Warning, tr("launcher.warn.game_version") + extra);
 }
 
 bool classify_file(const std::string& path, Kind& kind) {
-    std::string e = ext(path), name = lower(file_name(path));
-    if (name == "title.keys") return kind = Kind::TitleKeys, true;
-    if (e == ".keys" || e == ".txt" || e == ".prod") return kind = Kind::Keys, true;
-    if (e == ".zip") return kind = Kind::Mod, true;
-    if (e != ".nsp" && e != ".xci" && e != ".nsz" && e != ".xcz") return false;
-    Meta m = read_meta(path);
-    kind = m.title == kUpdateTitle ? Kind::Update : is_dlc_title(m.title) ? Kind::Dlc : Kind::Base;
-    return true;
-}
-
-namespace {
-
-// Where prod.keys usually is, the first places first.
-std::vector<fs::path> key_places(const std::vector<std::string>& near) {
-    std::vector<fs::path> c;
-    const fs::path h = u8(home());
-    c.push_back(h / ".switch" / "prod.keys");
-    const char* yuzus[] = {"yuzu", "suyu", "sudachi", "citron", "eden", "torzu"};
-#if defined(_WIN32)
-    fs::path app = u8(env("APPDATA"));
-    for (const char* y : yuzus) c.push_back(app / y / "keys" / "prod.keys");
-    c.push_back(app / "Ryujinx" / "system" / "prod.keys");
-#elif defined(__APPLE__)
-    fs::path app = h / "Library" / "Application Support";
-    for (const char* y : yuzus) c.push_back(app / y / "keys" / "prod.keys");
-    c.push_back(app / "Ryujinx" / "system" / "prod.keys");
-#else
-    std::string xd = env("XDG_DATA_HOME"), xc = env("XDG_CONFIG_HOME");
-    fs::path data = xd.empty() ? h / ".local" / "share" : u8(xd), config = xc.empty() ? h / ".config" : u8(xc);
-    for (const char* y : yuzus) c.push_back(data / y / "keys" / "prod.keys");
-    c.push_back(config / "Ryujinx" / "system" / "prod.keys");
-    // Flatpak emulators keep theirs under ~/.var/app/<app id>/{data,config}/.
-    std::error_code dir_ec;
-    for (const auto& a : fs::directory_iterator(h / ".var" / "app", dir_ec)) {
-        for (const char* y : yuzus) c.push_back(a.path() / "data" / y / "keys" / "prod.keys");
-        c.push_back(a.path() / "config" / "Ryujinx" / "system" / "prod.keys");
-    }
-#endif
-    for (const std::string& n : near) {
-        if (n.empty()) continue;
-        fs::path d = u8(n).parent_path();
-        c.push_back(d / "prod.keys");
-        c.push_back(d.parent_path() / "prod.keys");
-    }
-    return c;
-}
-
-}  // namespace
-
-std::string find_keys(const std::vector<std::string>& near) {
-    std::error_code ec;
-    for (const fs::path& p : key_places(near))
-        if (fs::is_regular_file(p, ec)) return str(p);
-    return "";
-}
-
-std::string title_keys_for(const std::string& prod_keys) {
-    if (prod_keys.empty()) return "";
-    fs::path t = u8(prod_keys).parent_path() / "title.keys";
-    std::error_code ec;
-    return fs::is_regular_file(t, ec) ? str(t) : std::string();
+    GameFolder g;
+    if (is_dir(path) && game_parts(path, g)) return kind = Kind::Game, true;
+    if (ext(path) == ".zip") return kind = Kind::Mod, true;
+    return false;
 }
 
 std::string short_dir(const std::string& path) {
@@ -426,23 +315,18 @@ std::string short_dir(const std::string& path) {
 
 namespace {
 
-// Whether a file's name makes it worth checking as `kind` (the pt-BR package: a .zip named like a translation).
+// Whether a found entry is worth checking as `kind`: a folder holding exefs/ and romfs/, or the pt-BR package (a .zip
+// named like a translation).
 bool search_match(Kind kind, const std::string& path) {
-    std::string name = lower(file_name(path)), e = ext(path);
-    switch (kind) {
-        case Kind::Keys: return e == ".keys" && name != "title.keys";
-        case Kind::TitleKeys: return name == "title.keys";
-        case Kind::Mod:
-            if (e != ".zip") return false;
-            for (const char* w : {"ptbr", "pt-br", "pt_br", "pt br", "tradu", "portug", "brasil", "brazil"})
-                if (name.find(w) != std::string::npos) return true;
-            return false;
-        default: {
-            if (e != ".nsp" && e != ".xci" && e != ".nsz" && e != ".xcz") return false;
-            Kind k;
-            return classify_file(path, k) && k == kind;
-        }
+    if (kind == Kind::Game) {
+        GameFolder g;
+        return game_parts(path, g);
     }
+    std::string name = lower(file_name(path));
+    if (ext(path) != ".zip") return false;
+    for (const char* w : {"ptbr", "pt-br", "pt_br", "pt br", "tradu", "portug", "brasil", "brazil"})
+        if (name.find(w) != std::string::npos) return true;
+    return false;
 }
 
 }  // namespace
@@ -461,16 +345,9 @@ std::vector<Found> search_files(Kind kind, const std::vector<std::string>& near)
         if (const char* p = SDL_GetUserFolder(f)) root(u8(p), 3);
     const fs::path h = u8(home());
     for (const char* n : {"Downloads", "Desktop", "Documents"}) root(h / n, 3);
-    std::vector<std::string> near_files;
-    for (const std::string& n : near) {
-        if (is_file(n)) near_files.push_back(n);
-        root(is_dir(n) ? u8(n) : u8(n).parent_path(), 2);
-    }
+    for (const std::string& n : near) root(is_dir(n) ? u8(n) : u8(n).parent_path(), 2);
     root(h, 1);
-    std::vector<fs::path> files;
-    if (kind == Kind::Keys || kind == Kind::TitleKeys)  // the emulators' folders too
-        for (const fs::path& p : key_places(near_files))
-            files.push_back(kind == Kind::Keys ? p : p.parent_path() / "title.keys");
+    std::vector<fs::path> files;  // the files (the pt-BR package) or folders (a game folder) to check
     for (const auto& [r, depth] : roots) {
         int budget = 20000;  // entries per folder: a huge Downloads folder costs a moment, never a hang
         for (auto it = fs::recursive_directory_iterator(r, fs::directory_options::skip_permission_denied, ec);
@@ -479,21 +356,26 @@ std::vector<Found> search_files(Kind kind, const std::vector<std::string>& near)
             const fs::path& p = it->path();
             if (it->is_directory(ec)) {
                 std::string n = str(p.filename());
+                if (kind == Kind::Game && search_match(kind, str(p))) {
+                    files.push_back(p);
+                    it.disable_recursion_pending();  // its own exefs/ and romfs/ are not other games
+                    continue;
+                }
                 if (it.depth() + 1 >= depth || n.empty() || n[0] == '.' || n == "node_modules") it.disable_recursion_pending();
                 continue;
             }
-            files.push_back(p);
+            if (kind != Kind::Game) files.push_back(p);
         }
     }
     std::vector<Found> out;
     std::vector<fs::path> seen;
     for (const fs::path& p : files) {
         std::string s = str(p);
-        if (!fs::is_regular_file(p, ec) || !search_match(kind, s)) continue;
+        if (kind != Kind::Game && (!fs::is_regular_file(p, ec) || !search_match(kind, s))) continue;
         fs::path c = fs::weakly_canonical(p, ec);
         if (std::find(seen.begin(), seen.end(), c) != seen.end()) continue;
         seen.push_back(c);
-        out.push_back({s, kind, file_size(s), check_file(kind, s)});
+        out.push_back({s, kind, kind == Kind::Game ? 0 : file_size(s), check_file(kind, s)});
         if (out.size() >= 40) break;
     }
     // The usable ones first, then by name.
@@ -505,6 +387,30 @@ std::vector<Found> search_files(Kind kind, const std::vector<std::string>& near)
 }
 
 // ---- builds ---------------------------------------------------------------------------------------------------
+
+BuildContents build_contents(const std::string& data) {
+    BuildContents c;
+    // version.ini (tools/acnh_version.py): "version = 2.0.7"
+    std::ifstream ini(u8(data + "/version.ini"));
+    for (std::string l; std::getline(ini, l);) {
+        size_t eq = l.find('=');
+        if (eq != std::string::npos && trim(l.substr(0, eq)) == "version") c.version = trim(l.substr(eq + 1));
+    }
+    // The add-on content: aoc/<index>/, linked from the game folder (runtime/src/hle_fs.cpp mounts the same folders).
+    std::error_code ec;
+    for (auto& e : fs::directory_iterator(u8(data + "/aoc"), ec)) {
+        if (!e.is_directory(ec)) continue;
+        std::string name = str(e.path().filename());
+        if (name.empty() || name.find_first_not_of("0123456789") != std::string::npos) continue;
+        AddOn a;
+        a.index = std::atoi(name.c_str());
+        for (auto& f : fs::recursive_directory_iterator(e.path(), ec))
+            if (f.is_regular_file(ec)) a.files++, a.bytes += f.file_size(ec);
+        c.addons.push_back(a);
+    }
+    std::sort(c.addons.begin(), c.addons.end(), [](const AddOn& x, const AddOn& y) { return x.index < y.index; });
+    return c;
+}
 
 const char* find_build(const std::string& folder, Build& out) {
 #if defined(_WIN32)
@@ -569,6 +475,25 @@ bool sdl3_dev_files() {
     return false;
 }
 
+#if defined(_WIN32)
+// The Visual Studio C++ build tools (Windows SDK, C runtime) the setup's clang-cl links against: vswhere lists them.
+bool msvc_tools() {
+    std::string pf = env("ProgramFiles(x86)");
+    fs::path vswhere = u8(pf) / "Microsoft Visual Studio" / "Installer" / "vswhere.exe";
+    std::error_code ec;
+    if (!fs::is_regular_file(vswhere, ec)) return false;
+    std::string cmd = "\"\"" + str(vswhere) + "\" -latest -products * -requires "
+                      "Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath\"";
+    FILE* p = _popen(cmd.c_str(), "r");
+    if (!p) return false;
+    char buf[512];
+    std::string out;
+    while (std::fgets(buf, sizeof buf, p)) out += buf;
+    _pclose(p);
+    return !trim(out).empty();
+}
+#endif
+
 bool vulkan_loader() {
     if (!SDL_Vulkan_LoadLibrary(nullptr)) return false;
     SDL_Vulkan_UnloadLibrary();
@@ -584,7 +509,12 @@ std::vector<Prereq> check_prerequisites(const std::string& install_dir) {
     };
     const std::string found = tr("launcher.check.found"), missing = tr("launcher.check.missing");
 #if defined(_WIN32)
-    r.push_back({"launcher.check.windows", Status::Error, tr("launcher.welcome.windows")});
+    // tools/setup_acnh.py fetches LLVM (clang-cl), SDL3, CMake and Ninja itself: Python, Visual Studio's C++ tools and
+    // a Vulkan driver are what it needs from the system.
+    add("launcher.check.scripts", !repo_root().empty(), Status::Error, found, tr("launcher.err.no_repo"));
+    add("launcher.check.python", in_path("py.exe") || in_path("python.exe"), Status::Error, found, missing);
+    add("launcher.check.compiler", msvc_tools(), Status::Error, found, missing);
+    add("launcher.check.vulkan", vulkan_loader(), Status::Error, found, missing);
 #else
     add("launcher.check.scripts", !repo_root().empty(), Status::Error, found, tr("launcher.err.no_repo"));
     add("launcher.check.compiler", in_path("clang") && in_path("clang++"), Status::Error, found, missing);
@@ -621,7 +551,9 @@ std::vector<Prereq> check_prerequisites(const std::string& install_dir) {
 
 std::string install_command() {
 #if defined(_WIN32)
-    return "";
+    return "winget install Python.Python.3.13\n"
+           "winget install Microsoft.VisualStudio.2022.BuildTools --override "
+           "\"--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended\"";
 #elif defined(__APPLE__)
     return "xcode-select --install\nbrew install llvm cmake ninja sdl3 molten-vk vulkan-loader libvpx libvorbis";
 #else

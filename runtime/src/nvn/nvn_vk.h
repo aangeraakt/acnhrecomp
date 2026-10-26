@@ -186,6 +186,7 @@ uint32_t frame_dump_every();
 bool frame_dump_due(uint64_t presents);  // NX_DUMP_FRAMES, or a dump_frames file in the data folder
 bool frame_dump_record(VkCommandBuffer cb, GpuImage& img);
 void frame_dump_write(const GpuImage& img, uint64_t frame, const char* suffix = "");  // NNNNN<suffix>.ppm
+bool frame_readback_lit(const GpuImage& img);  // the frame read back has something on it (not the boot's black)
 bool debug_snapshots_pending();  // NX_SNAP_*: this submit recorded snapshots (it is then waited for)
 
 // nvn_draw.cpp: replays one draw-related command; ends the render pass it may have open when asked.

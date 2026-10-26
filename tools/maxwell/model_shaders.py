@@ -72,8 +72,8 @@ def main():
     jobs = int(args[args.index("--jobs") + 1]) if "--jobs" in args else max(1, (os.cpu_count() or 2) // 2)
     out = os.path.join(root, GROUP)
     real = os.path.realpath(out)
-    if not real.startswith(os.path.realpath(os.path.join(containers.REPO, "private")) + os.sep):
-        sys.exit(f"refusing to write outside private/: {out}")
+    if not containers.output_allowed(out):
+        sys.exit(f"refusing to write game data into the repository outside private/: {out}")
     known = known_hashes(root)
     files = sorted(os.path.join(models, f) for f in os.listdir(models) if f.endswith(".Nin_NX_NVN.zs"))
     print(f"{len(files)} model archives, {len(known)} code blocks known from the other groups", flush=True)

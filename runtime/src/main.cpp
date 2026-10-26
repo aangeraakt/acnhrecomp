@@ -1,6 +1,7 @@
 // Boot: map and link the recompiled modules (what rtld does), create the main thread and enter
 // nn::init::Start(main thread handle, main module base, init, fini) like rtld's _start.
-// The platform's entry point (platform_win.cpp / platform_android.cpp) calls nx::boot().
+// The platform's entry point (platform_win.cpp, platform_mac.cpp, platform_linux.cpp, platform_android.cpp) calls
+// nx::boot().
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -15,7 +16,7 @@
 extern const nx::ModuleInfo nx_module_main;
 extern const nx::ModuleInfo nx_module_sdk;
 #ifdef NX_HAS_SUBSDK0
-// ACNH: subsdk0 is NintendoSDK_movie (nn::movie), imported by main. Recompiled like main and sdk.
+// ACNH: subsdk0 is SDK_movie (nn::movie), imported by main. Recompiled like main and sdk.
 extern const nx::ModuleInfo nx_module_subsdk0;
 #endif
 

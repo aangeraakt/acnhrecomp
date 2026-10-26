@@ -1,6 +1,7 @@
 // nn::hid at the API level: player 1's Npad state comes from the platform (XInput + keyboard on Windows, game
 // controllers + touch on Android). Vibration is accepted and dropped.
 #include <array>
+#include <chrono>
 #include <cctype>
 #include <atomic>
 #include <deque>
@@ -240,10 +241,46 @@ void GetMouseStates(CPU& c) {
     c.x[0] = 1;
 }
 
-// KeyboardState {s64 sampling; u64 modifiers; u8 keys[32]}: nothing pressed (the keyboard drives the pad).
+// The PC keyboard as a USB keyboard (plat::set_keyboard). While the game types with it (its text entry turns keys
+// into characters with nn::hid::GetKeyCode), the keys stop driving the pad (platform_sdl.cpp); a key that types and
+// is not turned into a character within kTypingProbeMs means the text entry has closed.
+std::mutex g_kbd_lock;
+uint64_t g_kbd_mods = 0;
+uint8_t g_kbd_keys[32] = {};
+std::atomic<bool> g_typing{false};
+std::atomic<bool> g_typing_known{false};  // the game reports its text entry (plat::keyboard_text_entry)
+std::atomic<int64_t> g_keycode_ms{0};  // the last GetKeyCode
+int64_t g_probe_ms = 0;                // a typing key pressed while typing, not yet turned into a character
+constexpr int64_t kTypingProbeMs = 250;
+
+int64_t now_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
+// KeyboardState {s64 sampling; u32 modifiers; u32 attributes (bit 0: connected); u8 keys[32]}.
+void GetDebugPadState(CPU& c) {
+    for (uint64_t k = 0; k < 0x20; k += 8) st<uint64_t>(c.x[0] + k, 0);
+}
+
 void GetKeyboardState(CPU& c) {
-    std::memset(reinterpret_cast<void*>(c.x[0]), 0, 0x30);
+    std::lock_guard lk(g_kbd_lock);
     st<int64_t>(c.x[0], int64_t(g_sampling));
+    st<uint32_t>(c.x[0] + 8, uint32_t(g_kbd_mods));
+    st<uint32_t>(c.x[0] + 12, 1);
+    std::memcpy(reinterpret_cast<void*>(c.x[0] + 16), g_kbd_keys, 32);
+}
+
+const char* const kGetKeyCodeName =
+    "_ZN2nn3hid10GetKeyCodeEPtiNS_4util10BitFlagSetILi32ENS0_16KeyboardModifierEEENS2_7BitPackIjNS0_14KeyboardLayoutEEE";
+
+// The SDK's own GetKeyCode, called through: only the time is noted.
+void GetKeyCode(CPU& c) {
+    g_keycode_ms = now_ms();
+    if (!g_typing_known && !g_typing.exchange(true))
+        log("hid: the game types with the keyboard: its keys no longer drive the pad");
+    static const uint64_t real = find_symbol(kGetKeyCodeName);
+    call(c, real);
 }
 
 void zero(CPU& c) { c.x[0] = 0; }
@@ -501,7 +538,12 @@ NX_HLE("_ZN2nn3hid13GetNpadStatesEPNS0_17NpadJoyRightStateEiRKj", GetNpadStatesO
 NX_HLE("_ZN2nn3hid15InitializeMouseEv", noop);
 NX_HLE("_ZN2nn3hid14GetMouseStatesEPNS0_10MouseStateEi", GetMouseStates);
 NX_HLE("_ZN2nn3hid18InitializeKeyboardEv", noop);
+// The debug pad (DebugPadState {s64 sampling; u32 attributes; u32 buttons; two sticks}: 0x20 bytes), read by ACNH
+// 1.0.0's engine: never connected here. Its real initialization went to the hid service, which is a stub.
+NX_HLE("_ZN2nn3hid18InitializeDebugPadEv", noop);
+NX_HLE("_ZN2nn3hid16GetDebugPadStateEPNS0_13DebugPadStateE", GetDebugPadState);
 NX_HLE("_ZN2nn3hid16GetKeyboardStateEPNS0_13KeyboardStateE", GetKeyboardState);
+NX_HLE(kGetKeyCodeName, GetKeyCode);
 NX_HLE("_ZN2nn3hid14DisconnectNpadERKj", noop);
 NX_HLE("_ZN2nn3hid18SwapNpadAssignmentERKjS2_", noop);
 NX_HLE("_ZN2nn3hid30SetNpadJoyAssignmentModeSingleERKj", noop);
@@ -526,6 +568,46 @@ NX_HLE("_ZN2nn3hid22GetSixAxisSensorStatesEPNS0_18SixAxisSensorStateEiRKNS0_19Si
 }  // namespace nx
 
 namespace nx::plat {
+
+void set_keyboard(uint64_t modifiers, const uint8_t keys[32]) {
+    std::lock_guard lk(g_kbd_lock);
+    int64_t now = now_ms();
+    for (int u = 0; u < 256; u++) {
+        bool was = g_kbd_keys[u / 8] >> (u % 8) & 1, is = keys[u / 8] >> (u % 8) & 1;
+        if (is && !was && key_types(u) && g_typing && !g_probe_ms) g_probe_ms = now;
+    }
+    if (g_typing_known) g_probe_ms = 0;
+    if (g_probe_ms && g_keycode_ms >= g_probe_ms) g_probe_ms = 0;  // typed: still typing
+    if (g_probe_ms && now - g_probe_ms > kTypingProbeMs) {
+        g_probe_ms = 0;
+        if (g_typing.exchange(false)) log("hid: the game no longer types with the keyboard: its keys drive the pad");
+    }
+    g_kbd_mods = modifiers;
+    std::memcpy(g_kbd_keys, keys, 32);
+}
+
+namespace {
+std::atomic<uint64_t> g_entry_frame{0};  // the last frame the game reported its text entry
+
+void set_text_entry(bool open) {
+    if (g_typing.exchange(open) != open)
+        log("hid: the game's text entry %s: the keys %s", open ? "opened" : "closed", open ? "type" : "drive the pad");
+}
+}  // namespace
+
+// A game stops reporting once its text entry has gone (its key handling no longer runs): open only while reported.
+bool keyboard_typing() {
+    if (g_typing_known && g_typing && g_frame > g_entry_frame + 3) set_text_entry(false);
+    return g_typing;
+}
+
+void keyboard_text_entry(bool open) {
+    g_typing_known = true;
+    g_entry_frame = g_frame.load();
+    set_text_entry(open);
+}
+
+bool keyboard_state_known() { return g_typing_known; }
 
 void set_mouse_touch(bool down, float u, float v) {
     std::lock_guard lk(g_touch_lock);

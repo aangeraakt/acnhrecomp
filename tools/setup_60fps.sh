@@ -8,7 +8,7 @@
 # into private/, builds the parameter file from your own dump, and recompiles main with the patch as a second body
 # of every function it changes (recomp --variant): one build plays at 30 or at 60, picked in the settings.
 #
-# usage: tools/setup_60fps.sh            (needs the game set up by tools/setup_acnh.sh first)
+# usage: tools/setup_60fps.sh            (needs the game set up by tools/setup_acnh.py first)
 cd "$(dirname "$0")/.." || exit 1
 set -e
 P=private
@@ -20,7 +20,7 @@ SRC=$P/third_party/acnh-60fps
 MOD=$G/mods/speedfix60
 say() { printf '\n== %s\n' "$*"; }
 
-[ -f "$G/exefs/main" ] && [ -d "$G/extract/romfs" ] || { echo "run tools/setup_acnh.sh first"; exit 1; }
+[ -f "$G/exefs/main" ] && [ -d "$G/extract/romfs" ] || { echo "run tools/setup_acnh.py first"; exit 1; }
 id=$("$PY" -c "print(open('$G/exefs/main','rb').read(0x50)[0x40:0x50].hex().upper())")
 [ "$id" = FCD2BB238ABE99E925B4E452DF1F41F1 ] || { echo "main is not 3.0.2 (build id $id)"; exit 1; }
 

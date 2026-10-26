@@ -1,7 +1,7 @@
 // nn::friends at the API level: a console with no friends, no blocked users and no network account. First needed by
 // Animal Crossing: New Horizons, which reads the blocked-user list when the island starts (friend:u was a stub that
 // handed out no service object, and GetBlockedUserList read through a null pointer). Online play stays unavailable:
-// the calls that need the network fail like a console that never linked a Nintendo Account.
+// the calls that need the network fail like a console that never linked a network account.
 #include <cstring>
 
 #include <nx/runtime.h>

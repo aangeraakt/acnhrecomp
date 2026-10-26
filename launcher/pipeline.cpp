@@ -1,9 +1,10 @@
 // The setup as a child process, and starting the game (launcher.h).
 //
-// tools/setup_acnh.sh runs in its own process group with its output (stdout and stderr) on a pipe: a reader thread
-// splits it into lines, keeps them for the log view, writes them to <install>/logs/launcher.log and follows the
-// stage lines ("== <stage>") and ninja's "[n/total]" counter. Cancel sends SIGTERM to the whole group (bash, python,
-// ninja and its compilers), then SIGKILL if something is still there 5 s later.
+// tools/setup_acnh.py runs in its own process group with its output (stdout and
+// stderr) on a pipe: a reader thread splits it into lines, keeps them for the log view, writes them to
+// <install>/logs/launcher.log and follows the stage lines ("== <stage>") and ninja's "[n/total]" counter. Cancel
+// sends SIGTERM to the whole group (bash, python, ninja and its compilers), then SIGKILL if something is still there
+// 5 s later. On Windows the group is a job object, and Cancel terminates it.
 #include "launcher.h"
 
 #include <SDL3/SDL.h>
@@ -18,7 +19,9 @@
 #include <mutex>
 #include <thread>
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
+#include <windows.h>
+#else
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/wait.h>
@@ -45,7 +48,7 @@ const float kWeight[kStageCount] = {0.06f, 0.08f, 0.01f, 0.12f, 0.04f, 0.01f, 0.
 
 int stage_of(const std::string& name) {
     static const std::pair<const char*, int> names[] = {
-        {"tools", kStageTools},     {"import", kStageImport},   {"mod ", kStageMods},  {"recompile", kStageRecompile},
+        {"tools", kStageTools},     {"game", kStageGame},   {"mod ", kStageMods},  {"recompile", kStageRecompile},
         {"shaders", kStageShaders}, {"fonts", kStageFonts},     {"build", kStageBuild}, {"done", kStageCount},
     };
     for (const auto& [n, s] : names)
@@ -117,19 +120,168 @@ void reader(int fd, FILE* log) {
 
 }  // namespace
 
-bool setup_supported() {
 #if defined(_WIN32)
-    return false;
-#else
-    return true;
-#endif
+HANDLE g_job = nullptr, g_proc = nullptr;
+std::atomic<bool> g_cancel{false};
+
+std::wstring wide(const std::string& s) {
+    int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
+    std::wstring w(size_t(n > 0 ? n - 1 : 0), L'\0');
+    if (n > 1) MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, w.data(), n);
+    return w;
 }
+
+// One argument of a command line as CommandLineToArgvW (and Python) read it back.
+std::wstring quote(const std::wstring& a) {
+    if (!a.empty() && a.find_first_of(L" \t\"") == std::wstring::npos) return a;
+    std::wstring q = L"\"";
+    size_t slashes = 0;
+    for (wchar_t c : a) {
+        if (c == L'\\') {
+            slashes++;
+            continue;
+        }
+        q.append(c == L'"' ? slashes * 2 + 1 : slashes, L'\\');
+        slashes = 0;
+        q += c;
+    }
+    q.append(slashes * 2, L'\\');
+    return q + L"\"";
+}
+
+// A Python 3 to run the setup with: NX_LAUNCHER_PYTHON, the repository's venv, the py launcher, python on PATH.
+std::vector<std::wstring> find_python(const std::string& root) {
+    if (const char* p = std::getenv("NX_LAUNCHER_PYTHON"); p && *p) return {wide(p)};
+    std::error_code ec;
+    std::string venv = root + "/private/venv/Scripts/python.exe";
+    if (std::filesystem::exists(utf8_path(venv), ec)) return {wide(venv)};
+    wchar_t found[MAX_PATH];
+    if (SearchPathW(nullptr, L"py.exe", nullptr, MAX_PATH, found, nullptr)) return {found, L"-3"};
+    if (SearchPathW(nullptr, L"python.exe", nullptr, MAX_PATH, found, nullptr)) return {found};
+    return {};
+}
+
+void reader(HANDLE pipe, FILE* log) {
+    std::string pending;
+    char buf[8192];
+    auto flush = [&] {
+        if (pending.empty()) return;
+        if (log) std::fprintf(log, "%s\n", pending.c_str()), std::fflush(log);
+        std::lock_guard lk(g_lock);
+        if (g_lines.size() < 200000) g_lines.push_back(pending);
+        on_line(pending);
+        pending.clear();
+    };
+    DWORD n = 0;
+    while (ReadFile(pipe, buf, sizeof buf, &n, nullptr) && n) {
+        for (DWORD i = 0; i < n; i++) {
+            char c = buf[i];
+            if (c == '\n' || c == '\r')
+                flush();
+            else if (pending.size() < 4096)
+                pending += c;
+        }
+    }
+    flush();
+    CloseHandle(pipe);
+    WaitForSingleObject(g_proc, INFINITE);
+    DWORD code = 1;
+    GetExitCodeProcess(g_proc, &code);
+    std::lock_guard lk(g_lock);
+    g_state.exit_code = int(code);
+    g_state.running = false;
+    g_state.finished = true;
+    g_state.cancelled = g_cancel;
+    g_state.elapsed = std::chrono::duration<double>(clock::now() - g_t0).count();
+    if (code == 0)
+        for (bool& d : g_state.done) d = true;
+    if (log) std::fprintf(log, "\n[launcher] exit code %lu\n", code), std::fclose(log);
+    CloseHandle(g_proc);
+    CloseHandle(g_job);
+    g_proc = g_job = nullptr;
+}
+#endif
+
+bool setup_supported() { return true; }
 
 bool setup_start(const SetupArgs& a, std::string& error) {
 #if defined(_WIN32)
-    (void)a;
-    error = "Windows";
-    return false;
+    {
+        std::lock_guard lk(g_lock);
+        if (g_state.running) return error = "already running", false;
+    }
+    std::string root = repo_root();
+    std::string script = std::getenv("NX_LAUNCHER_SCRIPT") ? std::getenv("NX_LAUNCHER_SCRIPT") : "";  // tests
+    if (script.empty()) {
+        if (root.empty()) return error = "tools/setup_acnh.py not found", false;
+        script = root + "/tools/setup_acnh.py";
+    }
+    std::vector<std::wstring> args = find_python(root);
+    if (args.empty()) return error = "Python 3 not found (winget install Python.Python.3.13)", false;
+    args.push_back(L"-u");
+    args.push_back(wide(script));
+    args.push_back(L"--out");
+    args.push_back(wide(a.install_dir));
+    auto opt = [&](const wchar_t* name, const std::string& v) {
+        if (!v.empty()) args.push_back(name), args.push_back(wide(v));
+    };
+    opt(L"--game", a.game);
+    if (!a.ptbr_zip.empty()) opt(L"--mod", "ptbr=" + a.ptbr_zip);
+    std::wstring cmd;
+    for (const std::wstring& s : args) cmd += (cmd.empty() ? L"" : L" ") + quote(s);
+
+    std::error_code ec;
+    std::filesystem::create_directories(utf8_path(a.install_dir + "/logs"), ec);
+    g_log_path = a.install_dir + "/logs/launcher.log";
+    FILE* log = _wfopen(utf8_path(g_log_path).c_str(), L"w");
+    if (log) {
+        int n = WideCharToMultiByte(CP_UTF8, 0, cmd.c_str(), -1, nullptr, 0, nullptr, nullptr);
+        std::string u(size_t(n > 0 ? n - 1 : 0), '\0');
+        if (n > 1) WideCharToMultiByte(CP_UTF8, 0, cmd.c_str(), -1, u.data(), n, nullptr, nullptr);
+        std::fprintf(log, "[launcher] %s\n", u.c_str());
+    }
+
+    SECURITY_ATTRIBUTES sa{sizeof sa, nullptr, TRUE};
+    HANDLE rd = nullptr, wr = nullptr;
+    if (!CreatePipe(&rd, &wr, &sa, 0)) return error = "CreatePipe failed", false;
+    SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
+    STARTUPINFOW si{sizeof si};
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = nullptr;
+    si.hStdOutput = wr;
+    si.hStdError = wr;
+    PROCESS_INFORMATION pi{};
+    SetEnvironmentVariableW(L"PYTHONUNBUFFERED", L"1");
+    std::wstring wcwd = root.empty() ? std::wstring() : wide(root);
+    BOOL ok = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr,
+                             wcwd.empty() ? nullptr : wcwd.c_str(), &si, &pi);
+    CloseHandle(wr);
+    if (!ok) {
+        CloseHandle(rd);
+        if (log) std::fclose(log);
+        return error = "could not start the setup (" + std::to_string(GetLastError()) + ")", false;
+    }
+    // The setup and everything it starts (pip, the recompiler, ninja and the compilers) live in one job object: Cancel
+    // ends them all, and so does the launcher closing.
+    HANDLE job = CreateJobObjectW(nullptr, nullptr);
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION li{};
+    li.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    SetInformationJobObject(job, JobObjectExtendedLimitInformation, &li, sizeof li);
+    AssignProcessToJobObject(job, pi.hProcess);
+    ResumeThread(pi.hThread);
+    CloseHandle(pi.hThread);
+    {
+        std::lock_guard lk(g_lock);
+        g_lines.clear();
+        g_state = SetupState();
+        g_state.running = true;
+        g_t0 = clock::now();
+        g_proc = pi.hProcess;
+        g_job = job;
+        g_cancel = false;
+    }
+    std::thread(reader, rd, log).detach();
+    return true;
 #else
     {
         std::lock_guard lk(g_lock);
@@ -138,18 +290,18 @@ bool setup_start(const SetupArgs& a, std::string& error) {
     std::string root = repo_root();
     std::string script = std::getenv("NX_LAUNCHER_SCRIPT") ? std::getenv("NX_LAUNCHER_SCRIPT") : "";  // tests
     if (script.empty()) {
-        if (root.empty()) return error = "tools/setup_acnh.sh not found", false;
-        script = root + "/tools/setup_acnh.sh";
+        if (root.empty()) return error = "tools/setup_acnh.py not found", false;
+        script = root + "/tools/setup_acnh.py";
     }
-    std::vector<std::string> args = {"/bin/bash", script, "--out", a.install_dir};
+    // The setup is Python on every OS: the system's python3 (it makes the private venv it needs).
+    std::vector<std::string> args = {script.size() > 3 && script.compare(script.size() - 3, 3, ".sh") == 0 ? "/bin/bash"
+                                                                                                          : "/usr/bin/env",
+                                     script, "--out", a.install_dir};
+    if (args[0] == "/usr/bin/env") args.insert(args.begin() + 1, {"python3", "-u"});
     auto opt = [&](const char* name, const std::string& v) {
         if (!v.empty()) args.push_back(name), args.push_back(v);
     };
-    opt("--keys", a.keys);
-    opt("--title-keys", a.title_keys);
-    opt("--base", a.base);
-    opt("--update", a.update);
-    for (const std::string& d : a.dlc) opt("--dlc", d);
+    opt("--game", a.game);
     if (!a.ptbr_zip.empty()) opt("--mod", "ptbr=" + a.ptbr_zip);
 
     std::error_code ec;
@@ -210,7 +362,12 @@ bool setup_start(const SetupArgs& a, std::string& error) {
 }
 
 void setup_cancel() {
-#if !defined(_WIN32)
+#if defined(_WIN32)
+    std::lock_guard lk(g_lock);
+    if (!g_state.running || !g_job) return;
+    g_cancel = true;
+    TerminateJobObject(g_job, 1);
+#else
     pid_t pid;
     {
         std::lock_guard lk(g_lock);
@@ -257,13 +414,26 @@ std::string setup_log_path() { return g_log_path; }
 
 // ---- the game -------------------------------------------------------------------------------------------------
 
-bool launch_game(const Build& b, std::string& error) {
+namespace {
+SDL_Process* g_game = nullptr;  // the game launch_game started, until game_window_shown() is true
+}  // namespace
+
+bool launch_game(const Build& b, std::string& error, SDL_Window* from) {
     SDL_Environment* env = SDL_CreateEnvironment(true);
     if (!env) return error = SDL_GetError(), false;
+    if (from) {  // NX_WINDOW_RECT (platform_sdl.cpp): the game's window takes the launcher's place
+        int x = 0, y = 0, w = 0, h = 0;
+        SDL_GetWindowPosition(from, &x, &y);
+        SDL_GetWindowSize(from, &w, &h);
+        char rect[96];
+        std::snprintf(rect, sizeof rect, "%d,%d,%d,%d%s", x, y, w, h,
+                      SDL_GetWindowFlags(from) & SDL_WINDOW_MAXIMIZED ? ",max" : "");
+        SDL_SetEnvironmentVariable(env, "NX_WINDOW_RECT", rect, true);
+    }
     SDL_SetEnvironmentVariable(env, "NX_DATA_ROOT", b.data.c_str(), true);
     SDL_SetEnvironmentVariable(env, "NX_LOG", (b.data + "/nx_play.log").c_str(), false);
 #if defined(__linux__)
-    SDL_SetEnvironmentVariable(env, "NX_MEM_LIMIT_GB", "10", false);  // as tools/acnh_linux.sh
+    SDL_SetEnvironmentVariable(env, "NX_MEM_LIMIT_GB", "10", false);
 #endif
     const char* argv[] = {b.exe.c_str(), nullptr};
     SDL_PropertiesID p = SDL_CreateProperties();
@@ -277,9 +447,62 @@ bool launch_game(const Build& b, std::string& error) {
     SDL_DestroyProperties(p);
     SDL_DestroyEnvironment(env);
     if (!proc) return error = SDL_GetError(), false;
-    SDL_DestroyProcess(proc);  // a background process keeps running
+    if (g_game) SDL_DestroyProcess(g_game);
+    g_game = proc;  // destroying a background process leaves it running
     return true;
 }
+
+#if defined(_WIN32)
+namespace {
+BOOL CALLBACK find_visible_window(HWND w, LPARAM pid) {
+    DWORD owner = 0;
+    GetWindowThreadProcessId(w, &owner);
+    if (owner != DWORD(pid) || !IsWindowVisible(w)) return TRUE;
+    SetLastError(ERROR_SUCCESS);
+    return FALSE;  // found: stop
+}
+}  // namespace
+#endif
+
+bool game_window_shown() {
+    if (!g_game) return true;
+    int code = 0;
+    bool shown = SDL_WaitProcess(g_game, false, &code);  // exited
+#if defined(_WIN32)
+    if (!shown) {
+        auto pid = SDL_GetNumberProperty(SDL_GetProcessProperties(g_game), SDL_PROP_PROCESS_PID_NUMBER, 0);
+        shown = !EnumWindows(find_visible_window, LPARAM(pid)) && GetLastError() == ERROR_SUCCESS;
+    }
+#else
+    // No portable way to see another process's windows: the caller's timeout decides.
+#endif
+    if (shown) SDL_DestroyProcess(g_game), g_game = nullptr;
+    return shown;
+}
+
+namespace {
+SDL_AudioStream* g_start_sound = nullptr;
+}  // namespace
+
+void start_sound_play() {
+    const char* base = SDL_GetBasePath();
+    if (!base || g_start_sound) return;
+    std::string path = std::string(base) + "start.wav";
+    if (!is_file(path) || !SDL_InitSubSystem(SDL_INIT_AUDIO)) return;
+    SDL_AudioSpec spec;
+    Uint8* data = nullptr;
+    Uint32 len = 0;
+    if (!SDL_LoadWAV(path.c_str(), &spec, &data, &len)) return;
+    g_start_sound = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
+    if (g_start_sound) {
+        SDL_PutAudioStreamData(g_start_sound, data, int(len));
+        SDL_FlushAudioStream(g_start_sound);
+        SDL_ResumeAudioStreamDevice(g_start_sound);
+    }
+    SDL_free(data);
+}
+
+bool start_sound_playing() { return g_start_sound && SDL_GetAudioStreamQueued(g_start_sound) > 0; }
 
 void open_folder(const std::string& path) {
     std::error_code ec;

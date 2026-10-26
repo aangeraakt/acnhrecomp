@@ -22,6 +22,7 @@ import collections
 import contextlib
 import dataclasses
 import io
+import importlib
 import multiprocessing
 import os
 import re
@@ -118,10 +119,16 @@ def main():
     done = 0
     if jobs == 1:
         results = map(_emit_chunk, chunks)
-    else:
+    elif "fork" in multiprocessing.get_all_start_methods():
         # Forked workers share the analysis (copy-on-write) instead of each redoing it.
         pool = multiprocessing.get_context("fork").Pool(jobs)
         results = pool.imap_unordered(_emit_chunk, chunks)
+    else:
+        # Windows has no fork: each spawned worker gets the analysis pickled once, when it starts. The workers find
+        # the functions by module name, and run as python -m recomp this module is __main__ only here.
+        me = importlib.import_module("recomp.__main__")
+        pool = multiprocessing.get_context("spawn").Pool(jobs, initializer=me._set_job, initargs=(_job, _variant))
+        results = pool.imap_unordered(me._emit_chunk, chunks)
     for handled, unhandled, count in results:
         e.handled += handled
         e.unhandled.update(unhandled)
@@ -218,6 +225,12 @@ def variant_function(e, f):
     return (code.replace(head, f"static void {sym}__v0(nx::CPU& NX_RESTRICT c) {{", 1) + "\n\n" +
             v1.replace(head, f"static void {sym}__v1(nx::CPU& NX_RESTRICT c) {{", 1) + "\n\n" +
             f"{head}\n    if (nx_variant_on && nx_variant_ok({f.start:#x})) {sym}__v1(c); else {sym}__v0(c);\n}}")
+
+
+def _set_job(job, variant):
+    """A spawned worker's start (no fork): the globals a forked worker would have inherited."""
+    global _job, _variant
+    _job, _variant = job, variant
 
 
 def _emit_chunk(chunk):

@@ -607,14 +607,19 @@ void OpenAudioRenderer(CPU& c) {
     // opens the renderer in the automatic mode, where the ADSP renders on its own. Our 5 ms thread is that ADSP, so
     // the renderer is switched to manual/CPU; otherwise every call failed with 0x40299 and nothing was ever rendered
     // (streamed music never advanced, and the opening cutscene waited for it forever).
-    // Where the two fields are moves between SDKs (16.2: +0x2d0; 20.5: +0x48): AudioRenderSystem::
-    // ExecuteAudioRendererRendering starts by loading both with `ldp w8, w9, [x0, #off]`, so the offset is read
-    // from that instruction. Writing at a stale offset corrupts the render system (a mutex: StartAudioRenderer then
-    // deadlocks).
+    // Where the two fields are moves between SDKs (16.2: +0x2d0; 20.5: +0x48; ACNH 1.0.0: +0x2d8; 2.0.7: +0x2b8).
+    // The sdks that export AudioRenderSystem::GetExecutionMode have it as `ldr w0, [x0, #off]`; SDK 20.5 has no such
+    // symbol and AudioRenderSystem::ExecuteAudioRendererRendering starts by loading both with `ldp w8, w9,
+    // [x0, #off]`. The offset is read from whichever is there. Writing at a stale offset corrupts the render system (a
+    // mutex: StartAudioRenderer then deadlocks; in ACNH 2.0.7 every frame failed with 0x40299 and the sound handles
+    // the game stops and waits for never stopped: the island never finished loading).
     uint64_t system = impl + 0x60;
     uint64_t mode_off = 0x2d0;
-    if (uint64_t f = find_symbol("_ZN2nn5audio6server17AudioRenderSystem29ExecuteAudioRendererRenderingEv")) {
-        uint32_t w = ld<uint32_t>(f);
+    if (uint64_t f = find_symbol("_ZNK2nn5audio6server17AudioRenderSystem16GetExecutionModeEv");
+        f && (ld<uint32_t>(f) & 0xFFC003FF) == 0xB9400000) {  // ldr w0, [x0, #imm12 * 4]
+        mode_off = uint64_t((ld<uint32_t>(f) >> 10) & 0xFFF) * 4;
+    } else if (uint64_t g = find_symbol("_ZN2nn5audio6server17AudioRenderSystem29ExecuteAudioRendererRenderingEv")) {
+        uint32_t w = ld<uint32_t>(g);
         if ((w & 0xFFC003E0) == 0x29400000)  // ldp wT1, wT2, [x0, #imm7 * 4]
             mode_off = uint64_t(int64_t(int32_t(w << 10) >> 25) * 4);
     }
@@ -730,9 +735,14 @@ void ApplyI3dl2ReverbEffect(CPU& c) {
     static int seen = 0;
     if (prof && !off && c.x[2] && ++seen == 500) {
         auto now = [] {
+#if defined(_WIN32)  // no thread CPU clock in the C runtime: wall time (run it on an idle machine)
+            return uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                std::chrono::steady_clock::now().time_since_epoch()).count());
+#else
             timespec ts;
             clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
             return uint64_t(ts.tv_sec) * 1000000000ull + uint64_t(ts.tv_nsec);
+#endif
         };
         const CPU saved = c;
         std::vector<uint64_t> t(3000);

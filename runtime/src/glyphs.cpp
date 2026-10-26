@@ -33,16 +33,21 @@ std::string glyph_override(const std::string& romfs_path) {
         if (style == "generic") style = "xbox";
     }
     if (style != "xbox" && style != "playstation" && style != "switch") style = "switch";
-    std::string layout = config_get("input.layout", "nintendo") == "xbox" ? "xbox" : "nintendo";
+    std::string layout = config_get("input.layout", "console") == "xbox" ? "xbox" : "console";
 
     static std::mutex lock;
     static std::string logged;  // log each choice once: the game may open the archive more than once
     std::lock_guard lk(lock);
     std::string choice = style + "/" + layout, path;
-    if (style != "switch" || layout != "nintendo") {  // switch on the Switch layout is the RomFS's own archive
+    if (style != "switch" || layout != "console") {  // switch on the Switch layout is the RomFS's own archive
         fs::path p = fs::u8path(plat::data_root()) / "fonts" / ("glyphs_" + style) / layout / "romfs" /
                      fs::u8path(romfs_path);
         std::error_code ec;
+        if (layout == "console" && !fs::is_regular_file(p, ec)) {  // made before the layout was named "console"
+            fs::path old = fs::u8path(plat::data_root()) / "fonts" / ("glyphs_" + style) / "nintendo" / "romfs" /
+                           fs::u8path(romfs_path);
+            if (fs::is_regular_file(old, ec)) p = old;
+        }
         if (fs::is_regular_file(p, ec)) {
             auto s = p.u8string();
             path.assign(s.begin(), s.end());

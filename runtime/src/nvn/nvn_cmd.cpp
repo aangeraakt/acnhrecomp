@@ -324,6 +324,14 @@ bool trace_record() {
 // thread presents, so a frame's later re-bind (the water's pass) often came just after g_frame moved on, counted as
 // the next frame's first clear and wiped the depth: the sea drawn over the pier, the player, the plaza.
 namespace {
+thread_local bool g_bind_clear = false;  // nvn_mark_bind_clear: the next clear of this thread is a bind's
+
+bool take_bind_clear() {
+    bool b = g_bind_clear;
+    g_bind_clear = false;
+    return b;
+}
+
 bool clear_once_site(uint64_t lr) {
     static const std::vector<uint64_t> sites = [] {
         std::vector<uint64_t> v;
@@ -371,6 +379,7 @@ void ClearColor(CPU& c) {
         log("rec %llx ClearColor %u (%g %g %g %g) mask %#x (lr %s)", (unsigned long long)c.x[0], uint32_t(c.x[1]),
             f ? f[0] : 0.0, f ? f[1] : 0.0, f ? f[2] : 0.0, f ? f[3] : 0.0, uint32_t(c.x[3]), describe(c.x[30]).c_str());
     }
+    if (take_bind_clear()) return;  // an engine's clear-on-bind (nvn_mark_bind_clear)
     {   // NX_SKIP_CLEAR_AT=<main offset>: drop the clears called from there (bisecting)
         static const char* e = std::getenv("NX_SKIP_CLEAR_AT");
         static const uint64_t at = e ? std::strtoull(e, nullptr, 16) : 0;
@@ -403,7 +412,7 @@ void ClearDepthStencil(CPU& c) {
     Cmd cmd{Cmd::ClearDepthStencil};
     cmd.f[0] = c.v[0].f32[0];
     cmd.mask = (c.x[1] & 1) | ((uint32_t(c.x[3]) & 0xFF) << 8);  // depth mask, stencil mask
-    if (clear_once_site(c.x[30])) cmd.mask |= kClearOnce;
+    if (take_bind_clear() || clear_once_site(c.x[30])) cmd.mask |= kClearOnce;
     cmd.i[0] = int32_t(c.x[2]);
     record(c.x[0], cmd);
 }
@@ -595,3 +604,9 @@ NX_HLE("nvnCommandBufferGetControlMemorySize", (memory_query<false, 1>));
 NX_HLE("nvnCommandBufferGetControlMemoryFree", (memory_query<false, 2>));
 
 }  // namespace nx::nvn
+
+// runtime.h: an engine's clear-on-bind, marked by a game hook (the next clear of this thread).
+void nx::nvn_mark_bind_clear() {
+    static const bool off = std::getenv("NX_BIND_CLEAR") && std::getenv("NX_BIND_CLEAR")[0] == '0';
+    if (!off) nvn::g_bind_clear = true;
+}

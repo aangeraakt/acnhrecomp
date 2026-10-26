@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a stand-in for the Switch shared font type 5 (Nintendo extension: controller button icons).
+"""Build a stand-in for the Switch shared font type 5 (extension font: controller button icons).
 
 The console's own extension font lives in a firmware system archive we cannot (and must not) use, so this script
 draws its own simple button icons and adds them to a host TrueType font:

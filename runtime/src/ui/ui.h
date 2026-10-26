@@ -18,6 +18,7 @@ void ui_vulkan_ready(PFN_vkGetInstanceProcAddr gipa, VkInstance instance, VkPhys
                      uint32_t family, VkQueue queue, bool dynamic_rendering);
 // After the frame reached the swapchain image (left in PRESENT_SRC_KHR), before the command buffer is submitted.
 void ui_record(VkCommandBuffer cb, VkImage image, VkFormat format, VkExtent2D extent);
+void ui_picture_shown();      // the game's first frame with something on it was presented (the startup hint follows)
 void ui_swapchain_changed();  // the swapchain's images were destroyed: drop their views
 void ui_shutdown();
 

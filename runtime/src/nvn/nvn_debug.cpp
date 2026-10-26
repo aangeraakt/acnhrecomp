@@ -360,6 +360,22 @@ void frame_dump_write(const GpuImage& img, uint64_t frame, const char* suffix) {
     p_vkUnmapMemory(vk_device(), g_readback.memory);
 }
 
+// Whether the frame frame_dump_record read back has something on it: any of a grid of points brighter than the boot's
+// black (or the dark grey of a texture never drawn into).
+bool frame_readback_lit(const GpuImage& img) {
+    void* p = nullptr;
+    if (p_vkMapMemory(vk_device(), g_readback.memory, 0, VK_WHOLE_SIZE, 0, &p) != VK_SUCCESS) return false;
+    const uint8_t* px = static_cast<const uint8_t*>(p);
+    bool lit = false;
+    for (uint32_t gy = 0; gy < 72 && !lit; gy++)
+        for (uint32_t gx = 0; gx < 128 && !lit; gx++) {
+            const uint8_t* s = px + (size_t(gy * img.height / 72) * img.width + gx * img.width / 128) * 4;
+            lit = s[0] > 40 || s[1] > 40 || s[2] > 40;
+        }
+    p_vkUnmapMemory(vk_device(), g_readback.memory);
+    return lit;
+}
+
 // ---- GPU profile (NX_GPU_PROFILE=1) --------------------------------------------------------------------------------
 // A timestamp at the start of every render pass and at the end of each submit; the time between two marks goes to
 // the first one's label ("<target WxH> fs <hash>"). Totals per label are logged every 60 presents, largest first.

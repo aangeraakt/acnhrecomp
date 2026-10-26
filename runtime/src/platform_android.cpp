@@ -292,6 +292,9 @@ void* create_window() {
 }
 
 void release_window(void* w) { ANativeWindow_release(static_cast<ANativeWindow*>(w)); }
+// The window is shown from the start here (the launcher's hand-over, NX_WINDOW_RECT, is Windows only).
+void picture_shown() {}
+uint64_t wait_vblank() { return 0; }  // no display vblank to wait on here: hle_vi.cpp keeps its timed tick
 
 uint64_t window_generation() { return g_window_gen; }
 

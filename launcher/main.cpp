@@ -6,7 +6,7 @@
 //
 // Tests: NX_LAUNCHER_SIZE=WxH (window size), NX_LAUNCHER_LANG=<code>, NX_LAUNCHER_PAGE=<page> (pages.cpp),
 // NX_LAUNCHER_SHOT=<file.bmp> (saves the window after NX_LAUNCHER_SHOT_AFTER seconds, default 1, and exits),
-// NX_LAUNCHER_INI=<file> (another launcher.ini), NX_LAUNCHER_SCRIPT=<script> (runs in place of setup_acnh.sh),
+// NX_LAUNCHER_INI=<file> (another launcher.ini), NX_LAUNCHER_SCRIPT=<script> (runs in place of setup_acnh.py),
 // NX_LAUNCHER_SCROLL=<0..1> (the page scrolled that far), NX_LAUNCHER_SEARCH=keys|base|update|dlc|ptbr (that card
 // of the files page searched).
 #include <SDL3/SDL.h>

@@ -10,7 +10,9 @@
 #   --every <n>         NX_DUMP_FRAMES=<n>: a frame every <n> presents
 #   --minutes <m>       stop the game after <m> minutes (default 8; 0: never)
 #   --live              start in the background and return (drive it with live.py; stop it with `run.sh stop`)
-#   --bin <path>        the game binary (default private/acnh/build/acnh)
+#   --bin <path>        the game binary (default <data>/build/acnh)
+#   --data <folder>     the install whose data and build the root links to (default private/acnh; a launcher or
+#                       setup_acnh.py --out folder)
 #   VAR=value           extra environment (NX_TIME_OFFSET=..., NX_TRACE_DRAWS=...)
 # tools/play/run.sh stop <name>                    stop a live run
 # tools/play/run.sh summary <name>                 fps, crashes, shader misses and hitches from the run's log
@@ -80,7 +82,7 @@ esac
 NAME=$1
 [ -n "$NAME" ] && [ "${NAME#-}" = "$NAME" ] || { sed -n '2,24p' "$0"; exit 1; }
 shift
-SAVE= KEEP= SCRIPT= FAST= EVERY_S= EVERY= MINUTES=8 LIVE= BIN=$SRC/build/acnh
+SAVE= KEEP= SCRIPT= FAST= EVERY_S= EVERY= MINUTES=8 LIVE= BIN=
 EXTRA=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -93,11 +95,13 @@ while [ $# -gt 0 ]; do
     --minutes) MINUTES=$2; shift ;;
     --live) LIVE=1 ;;
     --bin) BIN=$2; shift ;;
+    --data) SRC=$(cd "$2" && pwd) || exit 1; shift ;;
     *=*) EXTRA+=("$1") ;;
     *) echo "unknown option $1"; exit 1 ;;
   esac
   shift
 done
+[ -n "$BIN" ] || BIN=$SRC/build/acnh
 
 # One run of this tool at a time (the Mac has 8 GB); a game started elsewhere is only reported.
 for pf in "$PLAY"/roots/*/game.pid; do

@@ -1,4 +1,4 @@
-// nn::bcat (data delivered by Nintendo's servers: events, news) at the API level: the delivery cache storage mounts but
+// nn::bcat (data delivered by the console's servers: events, news) at the API level: the delivery cache storage mounts but
 // is empty, like on a console that has never been online. Every directory and file is "not found" and a sync request
 // is refused. First needed by Animal Crossing: New Horizons (the stubbed bcat:u answered Mount with success and the
 // SDK's shim then aborted, finding nothing mounted).
