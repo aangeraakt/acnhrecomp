@@ -120,7 +120,7 @@ GPU; see [docs/STATUS.md](docs/STATUS.md) for the full, regularly updated log.
 |---|---|
 | Linux x86-64 | Tested (Ubuntu, clang 21, Intel Iris Xe / Mesa ANV) |
 | macOS (Apple Silicon, MoltenVK) | Tested (M1, macOS 26/27, Homebrew's MoltenVK) |
-| Windows x86-64 | Builds with `tools/setup_acnh.py` (clang-cl, SDL3); contributed by a fork, not tested here |
+| Windows 10 / 11 x86-64 | Builds with the launcher or `tools/setup_acnh.py` (clang-cl, SDL3). The runtime and the launcher compile and link for Windows; not yet played through on Windows here |
 | Android | Not supported yet |
 
 ## Disclaimer
@@ -155,12 +155,12 @@ setup links to this folder instead of copying it: keep it where it is.
 
 ### Computer
 
-| | Linux (x86-64) | macOS (Apple Silicon, untested) |
-|---|---|---|
-| Compiler | clang 18 or newer (tested with 21) | Xcode command line tools / Homebrew LLVM |
-| GPU | Vulkan 1.3 (tested: Intel Iris Xe, Mesa ANV) | MoltenVK |
-| RAM | 16 GB (32 GB recommended to compile with more jobs) | 16 GB |
-| Disk | About 30 GB free (10.5 GB RomFS, 1.6 GB generated C++, object files) | Same |
+| | Linux (x86-64) | macOS (Apple Silicon, untested) | Windows 10 / 11 (x86-64) |
+|---|---|---|---|
+| Compiler | clang 18 or newer (tested with 21) | Xcode command line tools / Homebrew LLVM | Visual Studio 2022 C++ build tools; the setup downloads LLVM's clang-cl |
+| GPU | Vulkan 1.3 (tested: Intel Iris Xe, Mesa ANV) | MoltenVK | Vulkan 1.3: any recent NVIDIA, AMD or Intel driver |
+| RAM | 16 GB (32 GB recommended to compile with more jobs) | 16 GB | 16 GB |
+| Disk | About 30 GB free (10.5 GB RomFS, 1.6 GB generated C++, object files) | Same | Same, plus about 8 GB for LLVM and the Visual Studio build tools |
 
 Ubuntu / Debian packages:
 
@@ -178,9 +178,16 @@ brew install llvm cmake ninja sdl3 molten-vk vulkan-loader libvpx libvorbis
 `libvpx` and `libvorbis` decode the opening movie (VP9 + Vorbis). Without them the game still runs, but the movie
 is black.
 
-Windows: Python 3 (`winget install Python.Python.3.13`) and the Visual Studio C++ build tools (`winget install
-Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools
---includeRecommended"`); the setup fetches LLVM (clang-cl) and SDL3 itself.
+Windows (in a terminal: Windows Terminal, PowerShell or Command Prompt):
+
+```bat
+winget install Python.Python.3.13
+winget install Git.Git
+winget install Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+```
+
+The setup fetches LLVM (clang-cl) and SDL3 itself, and builds `libvpx` and `libvorbis` with vcpkg the first time
+(that step needs Git; without it the opening movie is black). The Vulkan driver comes with your GPU's driver.
 
 The setup script downloads everything else into `private/third_party/`: a Python virtual environment (capstone,
 lz4, zstandard, fonttools, cmake, ninja, unicorn), Vulkan-Headers 1.4.357, the .NET SDK 10.0.401 (unless the system
@@ -194,6 +201,12 @@ The launcher is a small program, built from this repository alone, that does the
 for your game folder, checks this computer, recompiles the game and then starts it. It uses the same look as the in-game
 settings screen, follows the system language (12 languages, changeable at any time from the top right) and works
 from small laptop screens to 4K.
+
+**Windows:** clone the repository (`git clone <this repository> ACNHRecomp`, or download it as a ZIP and extract
+it), then double-click **`Play ACNH (Windows).bat`** in its folder (or run `tools\launcher.bat`). The first time, it
+downloads LLVM and SDL3 and builds the launcher (a few minutes); after that it opens the launcher straight away.
+
+Linux and macOS:
 
 ```sh
 git clone <this repository> ACNHRecomp && cd ACNHRecomp
@@ -210,8 +223,9 @@ then run `build/launcher/acnhrecomp_launcher`.
    window. The folder is checked at once: its layout, its executables and the game version from main's build id
    (nothing is decrypted or unpacked).
 3. **Install.** Where the game goes (default `~/.local/share/ACNHRecomp`, `~/Library/Application Support/ACNHRecomp`
-   on macOS), and a check of this computer: compiler, Python, curl/tar, SDL3 development files, Vulkan driver,
-   movie libraries, disk space and memory, with the command that installs what is missing.
+   on macOS, `%LOCALAPPDATA%\ACNHRecomp` on Windows), and a check of this computer: compiler, Python, curl/tar,
+   SDL3 development files, Vulkan driver, movie libraries, disk space and memory, with the command that installs
+   what is missing.
 4. **Build.** Runs `tools/setup_acnh.py --game <game folder> --out <install folder>` and follows it: stages, progress (ninja's own
    counter during the compile, with an estimate of the time left), the full log, Stop. If a stage fails, the page
    says which, keeps the log open and offers *Copy log*, *Open logs folder* and *Try again* (finished stages are
@@ -224,7 +238,8 @@ repository) and **Change build folder**. Its own settings are in `launcher.ini` 
 (`~/.local/share/ACNHRecomp` on Linux).
 
 Windows: the launcher runs `tools/setup_acnh.py` with Python as on the other systems (the Python launcher `py`,
-or `python` on PATH).
+or `python` on PATH). `py tools\setup_acnh.py --launcher` builds just the launcher (in `build\launcher`), which is
+what `Play ACNH (Windows).bat` runs before opening it.
 
 ### From the command line
 
@@ -269,6 +284,17 @@ same shortcut on the desktop, run once:
 tools/install_mac_shortcut.sh
 ```
 
+**Windows:** the launcher's **Play** button, or a double-click on `acnh.exe` in the build folder
+(`private\acnh\build`, or `build` in the launcher's install folder): it finds its game files and settings from
+where it is. The presets below are in `tools\acnh_windows.bat`:
+
+```bat
+rem The preset: quality (the default), balanced, intel or lightest, as on Linux
+tools\acnh_windows.bat intel
+rem The same with the data folder of a setup run with --out, instead of private\acnh
+tools\acnh_windows.bat intel D:\ACNH-build
+```
+
 From a terminal:
 
 ```sh
@@ -279,7 +305,7 @@ tools/acnh_linux.sh lightest     # intel + FSR 1
 tools/acnh_mac.sh                # macOS: quality | balanced (default) | performance
 ```
 
-| Linux preset | Rendering | Upscaling | Audio reverb | Notes |
+| Linux / Windows preset | Rendering | Upscaling | Audio reverb | Notes |
 |---|---|---|---|---|
 | `quality` (default) | 1080p | Bilinear | On | |
 | `balanced` | 720p | FSR 1 | On | |
@@ -488,7 +514,8 @@ Notes:
 Settings (Plus + Minus) > About > **Create problem report** writes a `.zip` on the desktop with this session's log,
 the previous one (where a crash or freeze shows up), your settings and the computer's model, with no game data and
 your home folder's path replaced by `~`. Attach it to a GitHub issue. If the game crashes before the settings screen
-opens, run `NX_REPORT=1 private/acnh/build/acnh` once after the crash.
+opens, run `NX_REPORT=1 private/acnh/build/acnh` once after the crash (Windows, in Command Prompt:
+`set NX_REPORT=1` and then `private\acnh\build\acnh.exe`).
 
 **The picture tears in full screen.** Settings > Video > VSync (on by default).
 
@@ -509,11 +536,16 @@ already applied to `romfs/`.
 Lower the job count, for example `JOBS=4 python3 tools/setup_acnh.py`.
 
 **The opening movie is black.**
-Install `libvpx` and `libvorbis` (development packages) and rebuild.
+Install `libvpx` and `libvorbis` (development packages) and rebuild. On Windows, install Git
+(`winget install Git.Git`) and run the setup again: it builds them with vcpkg.
+
+**Windows: the setup says the Visual Studio C++ build tools are missing.**
+Install them with the `winget` command under [Requirements](#computer), then run it again. clang-cl comes from the
+setup, but it links against the Windows SDK and C runtime that the build tools install.
 
 **The game runs too slowly on a laptop.**
-Use `tools/acnh_linux.sh intel` or `lightest`, turn off the environmental reverb, and keep 720p rendering.
-Leave "Prepare shaders at startup" on to avoid stutter in places you have already visited.
+Use `tools/acnh_linux.sh intel` or `lightest` (Windows: `tools\acnh_windows.bat intel`), turn off the environmental
+reverb, and keep 720p rendering. Leave "Prepare shaders at startup" on to avoid stutter in places you have already visited.
 
 **Everything runs twice as fast.**
 The frame rate is set to 60 fps. Set it back to 30 fps (see [Status](#status)).
@@ -547,6 +579,7 @@ Join our [Discord Community](https://discord.gg/VJW9Dtdu7a) with your hardware d
 | `tools/maxwell/` | Shader container extraction and the Maxwell to SPIR-V harness |
 | `launcher/` | The first-run launcher: file checks, setup pipeline, home page (no game code) |
 | `tools/setup_acnh.py`, `tools/launcher.sh`, `tools/acnh_linux.sh`, `tools/acnh_mac.sh` | Setup and launch scripts |
+| `Play ACNH (Windows).bat`, `tools/launcher.bat`, `tools/acnh_windows.bat` | The same on Windows |
 | `tools/acnh_version.py`, `games/acnh/versions.txt` | The game version a folder holds, by main's build id, and its hooks |
 | `tools/check_no_game_data.sh` | Pre-commit hook that blocks game data |
 | `tests/` | Recompiler differential test (Unicorn) and runtime unit tests |

@@ -1,0 +1,3 @@
+# Windows batch files with LF line ends can lose their labels in cmd (goto jumps to the wrong place): CRLF in every
+# checkout, on every system.
+*.bat text eol=crlf

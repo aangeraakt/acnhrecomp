@@ -184,9 +184,26 @@ bool make_dirs(const std::string& path) {
 
 void log_line(const char* line) { std::fprintf(stderr, "%s\n", line); }
 
+// NX_DATA_ROOT, else pc_data_root ("private/<game>") from the working directory, else the folder the build is in:
+// tools/setup_acnh.py and the launcher put the game at <data folder>/build/<game>.exe, so a double click on it (the
+// working directory then being build/) still finds analysis/, extract/romfs and the saves.
 std::string data_root() {
-    const char* r = std::getenv("NX_DATA_ROOT");
-    return r ? r : nx::game::kInfo.pc_data_root;
+    if (const char* r = std::getenv("NX_DATA_ROOT"); r && *r) return r;
+    static const std::string root = [] {
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        const std::string def = nx::game::kInfo.pc_data_root;
+        if (fs::is_directory(fs::u8path(def) / "analysis", ec)) return def;
+        std::wstring exe(32768, L'\0');
+        DWORD n = GetModuleFileNameW(nullptr, exe.data(), DWORD(exe.size()));
+        if (n == 0 || n >= exe.size()) return def;
+        exe.resize(n);
+        fs::path dir = fs::path(exe).parent_path().parent_path();
+        if (!fs::is_directory(dir / "analysis", ec)) return def;
+        std::u8string u = dir.generic_u8string();
+        return std::string(u.begin(), u.end());
+    }();
+    return root;
 }
 
 std::string setting(const std::string& key) {

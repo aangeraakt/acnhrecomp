@@ -87,17 +87,17 @@ NX_HLE("_ZN2nn3mem17StandardAllocator8AllocateEmm", Allocate<kAllocAligned>);
 
 // Called from an instrumented copy of the generated code (bring-up only): the engine's heap allocation at
 // main+1450630 returned null. Prints the heap object's first words and any name-like strings it points to.
-void acnh_heap_fail(nx::CPU& c, unsigned long heap, unsigned long size) {
+void acnh_heap_fail(nx::CPU& c, uint64_t heap, uint64_t size) {
     using namespace nx;
     if (!nx::alloc_tracing()) return;
     if (c.x[0]) {
         if (size >= 0x40000)
-            log("heap: %#lx bytes from heap %#lx (%s) at %llx, caller %s", size, heap,
-                reinterpret_cast<const char*>(ld<uint64_t>(heap + 0x28)), (unsigned long long)c.x[0],
+            log("heap: %#llx bytes from heap %#llx (%s) at %llx, caller %s", (unsigned long long)size,
+                (unsigned long long)heap, reinterpret_cast<const char*>(ld<uint64_t>(heap + 0x28)), (unsigned long long)c.x[0],
                 describe(ld<uint64_t>(c.x[29] + 8)).c_str());
         return;
     }
-    log("heap: allocation of %#lx bytes from heap %#lx FAILED", size, heap);
+    log("heap: allocation of %#llx bytes from heap %#llx FAILED", (unsigned long long)size, (unsigned long long)heap);
     for (int k = 0; k < 24; k++) {
         uint64_t v = ld<uint64_t>(heap + 8 * k);
         const char* s = "";

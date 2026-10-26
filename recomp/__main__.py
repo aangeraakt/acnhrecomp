@@ -253,9 +253,17 @@ def default_jobs():
         with open("/proc/meminfo") as f:
             avail = next(int(l.split()[1]) for l in f if l.startswith("MemAvailable:")) // 1024
     except (OSError, StopIteration):
-        try:  # macOS
-            avail = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") // (1 << 20) // 2
-        except (ValueError, OSError):
+        try:
+            if os.name == "nt":  # GlobalMemoryStatusEx: ullAvailPhys, after dwLength, dwMemoryLoad, ullTotalPhys
+                import ctypes
+                status = (ctypes.c_ulonglong * 8)()
+                ctypes.cast(status, ctypes.POINTER(ctypes.c_ulong))[0] = ctypes.sizeof(status)
+                if not ctypes.windll.kernel32.GlobalMemoryStatusEx(status):
+                    return 1
+                avail = status[2] // (1 << 20)
+            else:  # macOS
+                avail = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") // (1 << 20) // 2
+        except (ValueError, OSError, AttributeError):
             return 1
     return max(1, min(cores, (avail - 1000) // 300))
 

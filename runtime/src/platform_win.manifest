@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- Windows: the game and the launcher run with UTF-8 as their ANSI code page (Windows 10 1903 and later). The C
+     runtime's narrow functions (fopen, remove, rename, getenv, std::filesystem::path from a std::string) then read
+     and give UTF-8, as on Linux and macOS: a user folder such as C:\Users\José holds the data, saves and logs like
+     any other. CMake merges this into the manifest the linker writes (a .manifest source of the executable). -->
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+    </windowsSettings>
+  </application>
+</assembly>

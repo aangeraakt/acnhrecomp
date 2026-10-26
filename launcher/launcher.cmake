@@ -33,6 +33,8 @@ endif()
 target_compile_definitions(acnhrecomp_launcher PRIVATE NX_HAVE_SDL3 NX_VERSION_STRING="0.2-${NX_LAUNCHER_DESCRIBE}"
                            NX_LAUNCHER_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 if(WIN32)
+    # UTF-8 as the process code page (paths under a user folder with accents), as the game.
+    target_sources(acnhrecomp_launcher PRIVATE runtime/src/platform_win.manifest)
     # SDL3.dll next to the launcher, so it starts from a double click (as the game, CMakeLists.txt).
     add_custom_command(TARGET acnhrecomp_launcher POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
                        $<TARGET_FILE:SDL3::SDL3> $<TARGET_FILE_DIR:acnhrecomp_launcher>)

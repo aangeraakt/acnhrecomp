@@ -295,8 +295,9 @@ else()
     # Vulkan loader of the GPU driver. Vulkan headers: NX_VULKAN_INCLUDE (the setup's Vulkan-Headers) or the LunarG SDK.
     find_package(SDL3 REQUIRED CONFIG)
     find_path(NX_VULKAN_INCLUDE vulkan/vulkan.h HINTS "${NX_VULKAN_SDK}/Include")
+    # platform_win.manifest: UTF-8 as the process code page, so the C runtime's narrow paths and getenv are UTF-8.
     add_executable(${NX_GAME} ${NX_RUNTIME_SOURCES} runtime/src/platform_win.cpp runtime/src/platform_sdl.cpp
-                   runtime/src/memguard_win.cpp)
+                   runtime/src/memguard_win.cpp runtime/src/platform_win.manifest)
     target_include_directories(${NX_GAME} PRIVATE runtime/include runtime/src "${NX_GAME_DIR}" "${NX_VULKAN_INCLUDE}")
     target_link_libraries(${NX_GAME} PRIVATE ${NX_GAME_LIBS} SDL3::SDL3 ole32 psapi winmm dxgi)
     # SDL3.dll next to the game, so it starts from a double click.

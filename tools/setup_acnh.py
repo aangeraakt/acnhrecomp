@@ -5,6 +5,7 @@ repository. Lines starting with "== " name the stage that begins: the launcher (
 
 usage: python3 tools/setup_acnh.py --game <game folder> [--mod <name>=<zip>]... [--out <folder>]
        python3 tools/setup_acnh.py [--out <folder>]          (later runs: the game folder is linked, the rest is checked)
+       python3 tools/setup_acnh.py --launcher                (only the launcher, in build/launcher: tools/launcher.bat)
   The game folder holds the game's executables and files as your own console dump gives them: exefs/ (main, sdk,
   subsdk0, main.npdm) and romfs/ (the update applied; extract/romfs/ is accepted too), and aoc/<index>/ for add-on
   content. It is linked into the data folder, not copied: keep it where it is. Any version of the game builds
@@ -149,6 +150,73 @@ def msvc_env():
     return env
 
 
+def toolchain():
+    """The compilers' environment and CMake's compiler flags: on Windows LLVM (clang-cl, lld) and SDL3 fetched into
+    private/third_party with the Visual Studio C++ build tools' environment, elsewhere the system's clang."""
+    if WIN:
+        llvm = os.path.join(T, f"llvm-{LLVM}")
+        if not os.path.exists(os.path.join(llvm, "bin", "clang-cl.exe")):
+            print(f"downloading LLVM {LLVM} (about 860 MB)", flush=True)
+            fetch(f"https://github.com/llvm/llvm-project/releases/download/llvmorg-{LLVM}/"
+                  f"clang+llvm-{LLVM}-x86_64-pc-windows-msvc.tar.xz", llvm)
+        sdl = os.path.join(T, f"SDL3-{SDL3}")
+        if not os.path.isdir(os.path.join(sdl, "cmake")):
+            fetch(f"https://github.com/libsdl-org/SDL/releases/download/release-{SDL3}/SDL3-devel-{SDL3}-VC.zip", sdl)
+        return msvc_env(), ["-DCMAKE_C_COMPILER=clang-cl", "-DCMAKE_CXX_COMPILER=clang-cl"]
+    for tool in ("clang", "clang++", "curl"):
+        if not shutil.which(tool):
+            fail(f"missing: {tool} (see README, Requirements)")
+    os.environ["CC"], os.environ["CXX"] = "clang", "clang++"
+    return dict(os.environ), []
+
+
+def prefix_path():
+    """CMAKE_PREFIX_PATH: SDL3 and the movie libraries on Windows, Homebrew on macOS, nothing on Linux."""
+    if WIN:
+        return f"{os.path.join(T, f'SDL3-{SDL3}')};{MOVIE_LIBS}"
+    if MAC:
+        # Started from the Finder (the launcher), PATH has no Homebrew: its usual places.
+        brew_exe = shutil.which("brew") or next((b for b in ("/opt/homebrew/bin/brew", "/usr/local/bin/brew")
+                                                 if os.path.exists(b)), None)
+        brew = (subprocess.run([brew_exe, "--prefix"], capture_output=True, text=True).stdout.strip() if brew_exe
+                else "") or "/opt/homebrew"
+        return brew
+    return ""
+
+
+def build_launcher(cmake, ninja, logs):
+    """The launcher (launcher/) in build/launcher, as tools/launcher.sh builds it: no game code, so it builds before
+    anything else. Skipped when it is newer than its sources."""
+    say("launcher")
+    build = os.path.join(ROOT, "build", "launcher")
+    exe = os.path.join(build, "acnhrecomp_launcher.exe" if WIN else "acnhrecomp_launcher")
+    sources = [os.path.join(ROOT, "CMakeLists.txt")]
+    for d in ("launcher", os.path.join("runtime", "src", "ui")):
+        sources += [e.path for e in os.scandir(os.path.join(ROOT, d)) if e.is_file()]
+    if os.path.exists(exe) and os.path.getmtime(exe) >= max(os.path.getmtime(s) for s in sources):
+        say(f"done: {exe}")
+        return
+    env, cc = toolchain()
+
+    def configured():  # launcher/launcher.cmake leaves the target out when it finds no SDL3
+        p = os.path.join(build, "build.ninja")
+        with open(p, encoding="utf-8", errors="replace") if os.path.exists(p) else open(os.devnull) as f:
+            return "acnhrecomp_launcher" in f.read()
+
+    if not configured():
+        # NX_GEN_DIR points at an empty folder: the launcher never needs the generated game code.
+        prefix = prefix_path()
+        extra = [f"-DCMAKE_PREFIX_PATH={prefix}"] if prefix else []
+        log = os.path.join(logs, "launcher_cmake.log")
+        run([cmake, "-S", ".", "-B", build, "-G", "Ninja", f"-DCMAKE_MAKE_PROGRAM={ninja}", "-DNX_GAME=acnh",
+             f"-DNX_GEN_DIR={os.path.join(build, 'no-gen')}", "-DCMAKE_BUILD_TYPE=Release"] + cc + extra,
+            log=log, env=env)
+        if not configured():
+            fail(f"SDL3 was not found, so the launcher cannot be built (README, Requirements; log: {log})")
+    run([ninja, "-C", build, "acnhrecomp_launcher"], log=os.path.join(logs, "launcher_build.log"), env=env)
+    say(f"done: {exe}")
+
+
 def find_game(game):
     """The exefs, romfs and aoc folders of a game folder (an ExeFS + RomFS dump: names in either case; the RomFS may
     also be extract/romfs), checked: the three modules are NSOs and the RomFS is the game's."""
@@ -214,6 +282,7 @@ def main():
     ap.add_argument("--game", default="", help="the game folder: exefs/ and romfs/ (and aoc/) of your own dump")
     ap.add_argument("--mod", action="append", default=[])
     ap.add_argument("--out", default="")
+    ap.add_argument("--launcher", action="store_true", help="only build the launcher (build/launcher)")
     a = ap.parse_args()
     G = os.path.abspath(a.out) if a.out else os.path.join(P, "acnh")
     os.makedirs(os.path.join(G, "logs"), exist_ok=True)
@@ -239,19 +308,13 @@ def main():
         fetch(f"https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v{VK_HEADERS}.tar.gz", vkh)
     if not os.path.exists(os.path.join(T, "imgui", "imgui.cpp")):  # the settings screen (Dear ImGui, MIT)
         fetch(f"https://github.com/ocornut/imgui/archive/refs/tags/v{IMGUI}.tar.gz", os.path.join(T, "imgui"))
+    if a.launcher:
+        build_launcher(cmake, ninja, logs)
+        return
     if not os.path.exists(os.path.join(T, "ryubing", "Ryujinx.sln")):
         fetch(f"https://codeberg.org/Software_arch/Ryubing/archive/{RYUBING}.tar.gz", os.path.join(T, "ryubing"))
+    env, cc = toolchain()
     if WIN:
-        llvm = os.path.join(T, f"llvm-{LLVM}")
-        if not os.path.exists(os.path.join(llvm, "bin", "clang-cl.exe")):
-            print(f"downloading LLVM {LLVM} (about 860 MB)", flush=True)
-            fetch(f"https://github.com/llvm/llvm-project/releases/download/llvmorg-{LLVM}/"
-                  f"clang+llvm-{LLVM}-x86_64-pc-windows-msvc.tar.xz", llvm)
-        sdl = os.path.join(T, f"SDL3-{SDL3}")
-        if not os.path.isdir(os.path.join(sdl, "cmake")):
-            fetch(f"https://github.com/libsdl-org/SDL/releases/download/release-{SDL3}/SDL3-devel-{SDL3}-VC.zip", sdl)
-        env = msvc_env()
-        cc = ["-DCMAKE_C_COMPILER=clang-cl", "-DCMAKE_CXX_COMPILER=clang-cl"]
         # libvpx and libvorbis decode the game's movies (runtime/src/hle_movie.cpp; the flight to the island is a VP9
         # movie): static libraries built by vcpkg the first time, a few minutes. Without git the movies are black.
         vcpkg = os.path.join(T, "vcpkg")
@@ -267,14 +330,6 @@ def main():
                     env=env, cwd=vcpkg)
             else:
                 print("git not found: no libvpx, the game's movies will be black", flush=True)
-    else:
-        for tool in ("clang", "clang++", "curl"):
-            if not shutil.which(tool):
-                fail(f"missing: {tool} (see README, Requirements)")
-        env = dict(os.environ)
-        cc = []
-        os.environ["CC"], os.environ["CXX"] = "clang", "clang++"
-        env["CC"], env["CXX"] = "clang", "clang++"
     # .NET 10 for the shader translator: the system's when it has SDK 10, else a private copy.
     dotnet = shutil.which("dotnet")
     has10 = dotnet and any(l.startswith("10.") for l in subprocess.run([dotnet, "--list-sdks"], capture_output=True,
@@ -434,15 +489,8 @@ def main():
     # ---- build --------------------------------------------------------------------------------------------------
     say(f"build (-j{jobs}; the first build compiles ~5 CPU-hours of code, about {300 // jobs + 10} minutes here)")
     extra = [f"-DNX_GEN_DIR={os.path.join(G, 'gen')}"]
-    if WIN:
-        extra.append(f"-DCMAKE_PREFIX_PATH={os.path.join(T, f'SDL3-{SDL3}')};{MOVIE_LIBS}")
-    elif MAC:
-        # Started from the Finder (the launcher), PATH has no Homebrew: its usual places.
-        brew_exe = shutil.which("brew") or next((b for b in ("/opt/homebrew/bin/brew", "/usr/local/bin/brew")
-                                                 if os.path.exists(b)), None)
-        brew = (subprocess.run([brew_exe, "--prefix"], capture_output=True, text=True).stdout.strip() if brew_exe
-                else "") or "/opt/homebrew"
-        extra.append(f"-DCMAKE_PREFIX_PATH={brew}")
+    if prefix := prefix_path():
+        extra.append(f"-DCMAKE_PREFIX_PATH={prefix}")
     build = os.path.join(G, "build")
     run([cmake, "-S", ".", "-B", build, "-G", "Ninja", f"-DCMAKE_MAKE_PROGRAM={ninja}", "-DNX_GAME=acnh",
          "-DCMAKE_BUILD_TYPE=Release", f"-DNX_VULKAN_INCLUDE={os.path.join(vkh, 'include')}"] + cc + extra,
